@@ -19,7 +19,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
-  ) {}
+  ) { }
 
   async register(dto: RegisterDto, avatarFile?: Express.Multer.File) {
     const existing = await this.prisma.user.findUnique({
@@ -62,11 +62,16 @@ export class AuthService {
         name: true,
         password: true,
         avatarUrl: true,
+        isActive: true,
       },
     });
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account is inactive');
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.password);
@@ -97,11 +102,15 @@ export class AuthService {
 
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true },
+        select: { id: true, email: true, isActive: true },
       });
 
       if (!user) {
         throw new UnauthorizedException('User not found');
+      }
+
+      if (!user.isActive) {
+        throw new UnauthorizedException('Account is inactive');
       }
 
       return this.generateTokens(user.id, user.email);

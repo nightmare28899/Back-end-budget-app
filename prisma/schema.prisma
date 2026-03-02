@@ -14,6 +14,7 @@ model User {
   avatarUrl   String?
   dailyBudget Decimal    @default(0) @db.Decimal(10, 2)
   currency    String     @default("MXN")
+  isActive    Boolean    @default(true)
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
   categories  Category[]
