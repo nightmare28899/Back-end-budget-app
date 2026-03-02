@@ -34,6 +34,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         id: true,
         email: true,
         name: true,
+        role: true,
         dailyBudget: true,
         currency: true,
         isActive: true,
@@ -48,8 +49,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException("Account is inactive");
     }
 
-    // Exclude isActive from the returned requested user context
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { isActive, ...activeUser } = user;
     return activeUser;
   }

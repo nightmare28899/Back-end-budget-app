@@ -35,6 +35,7 @@ export class AuthController {
         email: { type: "string", format: "email" },
         name: { type: "string" },
         password: { type: "string", minLength: 6 },
+        role: { type: "string", enum: ["user"], default: "user" },
         avatar: { type: "string", format: "binary" },
       },
       required: ["email", "name", "password"],

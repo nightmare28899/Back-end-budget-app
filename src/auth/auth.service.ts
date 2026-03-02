@@ -42,6 +42,7 @@ export class AuthService {
         email: dto.email,
         name: dto.name,
         password: hashedPassword,
+        role: dto.role ?? "user",
         avatarUrl,
         isActive: true,
       },
@@ -49,6 +50,7 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
+        role: true,
         avatarUrl: true,
         isActive: true,
       },
@@ -67,6 +69,7 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
+        role: true,
         password: true,
         avatarUrl: true,
         isActive: true,
@@ -92,6 +95,7 @@ export class AuthService {
       id: user.id,
       email: user.email,
       name: user.name,
+      role: user.role,
       avatarUrl: user.avatarUrl,
     });
 

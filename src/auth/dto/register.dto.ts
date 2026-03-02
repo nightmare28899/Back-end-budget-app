@@ -1,12 +1,14 @@
 import { Transform } from "class-transformer";
 import {
   IsEmail,
+  IsIn,
   IsNotEmpty,
+  IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from "class-validator";
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   trimLowerCaseStringValue,
   trimStringValue,
@@ -30,4 +32,13 @@ export class RegisterDto {
   @MinLength(6)
   @MaxLength(128)
   password: string;
+
+  @ApiPropertyOptional({ example: "user", default: "user" })
+  @Transform(({ value }) =>
+    value === undefined ? "user" : trimLowerCaseStringValue(value as unknown),
+  )
+  @IsOptional()
+  @IsString()
+  @IsIn(["user"])
+  role?: string;
 }

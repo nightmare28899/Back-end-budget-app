@@ -11,6 +11,7 @@ model User {
   email       String     @unique
   password    String
   name        String
+  role        String     @default("user")
   avatarUrl   String?
   dailyBudget Decimal    @default(0) @db.Decimal(10, 2)
   currency    String     @default("MXN")
