@@ -3,16 +3,16 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Cron } from '@nestjs/schedule';
-import * as nodemailer from 'nodemailer';
-import { PrismaService } from '../prisma/prisma.service';
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Cron } from "@nestjs/schedule";
+import * as nodemailer from "nodemailer";
+import { PrismaService } from "../prisma/prisma.service";
 import {
   AnalyticsService,
   CategoryBreakdownItem,
   WeeklySummary,
-} from '../analytics/analytics.service';
+} from "../analytics/analytics.service";
 
 @Injectable()
 export class ReportsService {
@@ -25,19 +25,18 @@ export class ReportsService {
     private readonly configService: ConfigService,
   ) {
     this.transporter = nodemailer.createTransport({
-      host: this.configService.get<string>('MAIL_HOST', 'smtp.sendgrid.net'),
-      port: parseInt(this.configService.get<string>('MAIL_PORT', '587'), 10),
+      host: this.configService.get<string>("MAIL_HOST", "smtp.sendgrid.net"),
+      port: parseInt(this.configService.get<string>("MAIL_PORT", "587"), 10),
       auth: {
-        user: this.configService.get<string>('MAIL_USER'),
-        pass: this.configService.get<string>('MAIL_PASSWORD'),
+        user: this.configService.get<string>("MAIL_USER"),
+        pass: this.configService.get<string>("MAIL_PASSWORD"),
       },
     });
   }
 
-  // Runs every Sunday at 8 PM
-  @Cron('0 20 * * 0')
+  @Cron("0 20 * * 0")
   async sendWeeklyReports() {
-    this.logger.log('Starting weekly report generation...');
+    this.logger.log("Starting weekly report generation...");
 
     const users = await this.prisma.user.findMany({
       select: { id: true, email: true, name: true },
@@ -49,7 +48,7 @@ export class ReportsService {
         this.logger.log(`Weekly report sent to ${user.email}`);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : 'Unknown error';
+          error instanceof Error ? error.message : "Unknown error";
         this.logger.error(`Failed to send report to ${user.email}: ${message}`);
       }
     }
@@ -68,8 +67,8 @@ export class ReportsService {
     try {
       await this.transporter.sendMail({
         from: this.configService.get<string>(
-          'MAIL_FROM',
-          'noreply@budgetapp.com',
+          "MAIL_FROM",
+          "noreply@budgetapp.com",
         ),
         to: email,
         subject: `💰 Your Weekly Budget Report (${summary.period.start} - ${summary.period.end})`,
@@ -79,14 +78,14 @@ export class ReportsService {
       const message =
         error instanceof Error
           ? error.message
-          : 'Unknown email transport error';
+          : "Unknown email transport error";
       this.logger.error(`Failed to send report to ${email}: ${message}`);
       throw new InternalServerErrorException(
-        'Failed to send email report. Verify MAIL_* SMTP configuration.',
+        "Failed to send email report. Verify MAIL_* SMTP configuration.",
       );
     }
 
-    return { message: 'Report sent successfully' };
+    return { message: "Report sent successfully" };
   }
 
   async sendManualReport(userId: string, targetEmail?: string) {
@@ -95,7 +94,7 @@ export class ReportsService {
       select: { id: true, email: true, name: true },
     });
 
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException("User not found");
 
     const destinationEmail = targetEmail?.trim() || user.email;
     return this.sendReportForUser(user.id, destinationEmail, user.name);
@@ -121,7 +120,7 @@ export class ReportsService {
           </td>
         </tr>`,
       )
-      .join('');
+      .join("");
 
     return `
       <!DOCTYPE html>
@@ -157,7 +156,7 @@ export class ReportsService {
             <table>
               <tr>
                 <td style="padding: 8px 0;"><strong>Total Spent</strong></td>
-                <td style="padding: 8px 0; text-align: right; font-size: 20px; font-weight: bold; color: ${summary.remaining >= 0 ? '#27ae60' : '#e74c3c'};">
+                <td style="padding: 8px 0; text-align: right; font-size: 20px; font-weight: bold; color: ${summary.remaining >= 0 ? "#27ae60" : "#e74c3c"};">
                   $${summary.totalSpent.toFixed(2)}
                 </td>
               </tr>
@@ -167,7 +166,7 @@ export class ReportsService {
               </tr>
               <tr>
                 <td style="padding: 8px 0;">Remaining</td>
-                <td style="padding: 8px 0; text-align: right; color: ${summary.remaining >= 0 ? '#27ae60' : '#e74c3c'};">
+                <td style="padding: 8px 0; text-align: right; color: ${summary.remaining >= 0 ? "#27ae60" : "#e74c3c"};">
                   $${summary.remaining.toFixed(2)}
                 </td>
               </tr>
@@ -197,7 +196,7 @@ export class ReportsService {
                 ${categoryRows}
               </tbody>
             </table>`
-                : ''
+                : ""
             }
           </div>
           <div class="footer">

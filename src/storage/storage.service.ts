@@ -1,7 +1,7 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import * as Minio from 'minio';
-import { randomUUID } from 'node:crypto';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import * as Minio from "minio";
+import { randomUUID } from "node:crypto";
 
 @Injectable()
 export class StorageService implements OnModuleInit {
@@ -10,19 +10,19 @@ export class StorageService implements OnModuleInit {
   private bucket: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.bucket = this.configService.get<string>('MINIO_BUCKET', 'receipts');
+    this.bucket = this.configService.get<string>("MINIO_BUCKET", "receipts");
     this.minioClient = new Minio.Client({
-      endPoint: this.configService.get<string>('MINIO_ENDPOINT', 'localhost'),
-      port: parseInt(this.configService.get<string>('MINIO_PORT', '9000'), 10),
+      endPoint: this.configService.get<string>("MINIO_ENDPOINT", "localhost"),
+      port: parseInt(this.configService.get<string>("MINIO_PORT", "9000"), 10),
       useSSL:
-        this.configService.get<string>('MINIO_USE_SSL', 'false') === 'true',
+        this.configService.get<string>("MINIO_USE_SSL", "false") === "true",
       accessKey: this.configService.get<string>(
-        'MINIO_ACCESS_KEY',
-        'minioadmin',
+        "MINIO_ACCESS_KEY",
+        "minioadmin",
       ),
       secretKey: this.configService.get<string>(
-        'MINIO_SECRET_KEY',
-        'minioadmin',
+        "MINIO_SECRET_KEY",
+        "minioadmin",
       ),
     });
   }
@@ -35,7 +35,7 @@ export class StorageService implements OnModuleInit {
         this.logger.log(`Bucket "${this.bucket}" created`);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      const message = error instanceof Error ? error.message : "Unknown error";
       this.logger.warn(
         `Could not connect to MinIO: ${message}. Image uploads will fail.`,
       );
@@ -44,9 +44,9 @@ export class StorageService implements OnModuleInit {
 
   async uploadFile(
     file: Express.Multer.File,
-    folder = 'receipts',
+    folder = "receipts",
   ): Promise<string> {
-    const ext = file.originalname.split('.').pop();
+    const ext = file.originalname.split(".").pop();
     const objectName = `${folder}/${randomUUID()}.${ext}`;
 
     await this.minioClient.putObject(
@@ -54,7 +54,7 @@ export class StorageService implements OnModuleInit {
       objectName,
       file.buffer,
       file.size,
-      { 'Content-Type': file.mimetype },
+      { "Content-Type": file.mimetype },
     );
 
     return objectName;

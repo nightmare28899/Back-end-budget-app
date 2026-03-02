@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { UpdateUserDto } from './dto/update-user.dto';
-import { StorageService } from '../storage/storage.service';
+import { Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { UpdateUserDto } from "./dto/update-user.dto";
+import { StorageService } from "../storage/storage.service";
 
 @Injectable()
 export class UsersService {
@@ -42,7 +42,7 @@ export class UsersService {
     if (avatarFile) {
       nextAvatarKey = await this.storageService.uploadFile(
         avatarFile,
-        'avatars',
+        "avatars",
       );
     }
 
@@ -69,8 +69,8 @@ export class UsersService {
     ) {
       try {
         await this.storageService.deleteFile(current.avatarUrl);
-      } catch {
-        // Best-effort cleanup of replaced avatar file
+      } catch (error) {
+        console.error(error);
       }
     }
 
@@ -93,7 +93,8 @@ export class UsersService {
     try {
       const presigned = await this.storageService.getFileUrl(avatarKey);
       return { ...user, avatarUrl: presigned, avatarKey };
-    } catch {
+    } catch (error) {
+      console.error("Failed to generate presigned URL for avatar:", error);
       return { ...user, avatarKey };
     }
   }

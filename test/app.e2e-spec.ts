@@ -1,12 +1,12 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
-import { PrismaService } from './../src/prisma/prisma.service';
-import { StorageService } from './../src/storage/storage.service';
+import { Test, TestingModule } from "@nestjs/testing";
+import { INestApplication, ValidationPipe } from "@nestjs/common";
+import request from "supertest";
+import { App } from "supertest/types";
+import { AppModule } from "./../src/app.module";
+import { PrismaService } from "./../src/prisma/prisma.service";
+import { StorageService } from "./../src/storage/storage.service";
 
-describe('AppController (e2e)', () => {
+describe("AppController (e2e)", () => {
   let app: INestApplication<App>;
 
   const prismaMock = {
@@ -48,9 +48,9 @@ describe('AppController (e2e)', () => {
     await app.close();
   });
 
-  it('/auth/login (POST) validates body', () => {
+  it("/auth/login (POST) validates body", () => {
     return request(app.getHttpServer())
-      .post('/auth/login')
+      .post("/auth/login")
       .send({})
       .expect(400);
   });

@@ -2,10 +2,10 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateCategoryDto } from './dto/create-category.dto';
-import { UpdateCategoryDto } from './dto/update-category.dto';
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { CreateCategoryDto } from "./dto/create-category.dto";
+import { UpdateCategoryDto } from "./dto/update-category.dto";
 
 @Injectable()
 export class CategoriesService {
@@ -17,8 +17,8 @@ export class CategoriesService {
         data: { ...dto, userId },
       });
     } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'P2002') {
-        throw new ConflictException('Category already exists');
+      if (error instanceof Error && "code" in error && error.code === "P2002") {
+        throw new ConflictException("Category already exists");
       }
 
       throw error;
@@ -28,7 +28,7 @@ export class CategoriesService {
   async findAll(userId: string) {
     return this.prisma.category.findMany({
       where: { userId },
-      orderBy: { name: 'asc' },
+      orderBy: { name: "asc" },
     });
   }
 
@@ -36,7 +36,7 @@ export class CategoriesService {
     const category = await this.prisma.category.findFirst({
       where: { id, userId },
     });
-    if (!category) throw new NotFoundException('Category not found');
+    if (!category) throw new NotFoundException("Category not found");
     return category;
   }
 
@@ -55,13 +55,13 @@ export class CategoriesService {
 
   async seedDefaults(userId: string) {
     const defaults = [
-      { name: 'Food', icon: '🍔', color: '#FF6B6B' },
-      { name: 'Transport', icon: '🚗', color: '#4ECDC4' },
-      { name: 'Shopping', icon: '🛍️', color: '#45B7D1' },
-      { name: 'Entertainment', icon: '🎬', color: '#96CEB4' },
-      { name: 'Health', icon: '💊', color: '#FFEAA7' },
-      { name: 'Bills', icon: '📄', color: '#DDA0DD' },
-      { name: 'Other', icon: '📦', color: '#95A5A6' },
+      { name: "Food", icon: "🍔", color: "#FF6B6B" },
+      { name: "Transport", icon: "🚗", color: "#4ECDC4" },
+      { name: "Shopping", icon: "🛍️", color: "#45B7D1" },
+      { name: "Entertainment", icon: "🎬", color: "#96CEB4" },
+      { name: "Health", icon: "💊", color: "#FFEAA7" },
+      { name: "Bills", icon: "📄", color: "#DDA0DD" },
+      { name: "Other", icon: "📦", color: "#95A5A6" },
     ];
 
     const existing = await this.prisma.category.findMany({
@@ -89,8 +89,8 @@ export class CategoriesService {
     return {
       message:
         missingDefaults.length > 0
-          ? 'Default categories created'
-          : 'Default categories already exist',
+          ? "Default categories created"
+          : "Default categories already exist",
       created: missingDefaults.length,
       existing: defaults.length - missingDefaults.length,
       total: categories.length,

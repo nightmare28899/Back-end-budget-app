@@ -8,13 +8,13 @@ import {
   MaxLength,
   IsUUID,
   Matches,
-} from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { trimStringValue } from '../../common/dto/string-transformers';
+} from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Transform, Type } from "class-transformer";
+import { trimStringValue } from "../../common/dto/string-transformers";
 
 export class CreateExpenseDto {
-  @ApiProperty({ example: 'Coffee at Starbucks' })
+  @ApiProperty({ example: "Coffee at Starbucks" })
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
   @IsNotEmpty()
@@ -27,28 +27,28 @@ export class CreateExpenseDto {
   @Type(() => Number)
   cost: number;
 
-  @ApiPropertyOptional({ example: 'Great latte' })
+  @ApiPropertyOptional({ example: "Great latte" })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
   @MaxLength(1000)
   note?: string;
 
-  @ApiPropertyOptional({ example: '2026-02-27T12:00:00.000Z' })
+  @ApiPropertyOptional({ example: "2026-02-27T12:00:00.000Z" })
   @IsOptional()
   @IsDateString()
   date?: string;
 
   @ApiPropertyOptional({
-    description: 'Existing category ID. Required if categoryName is not sent.',
+    description: "Existing category ID. Required if categoryName is not sent.",
   })
   @IsOptional()
   @IsUUID()
   categoryId?: string;
 
   @ApiPropertyOptional({
-    description: 'Category name to create/use when categoryId is not provided.',
-    example: 'Food',
+    description: "Category name to create/use when categoryId is not provided.",
+    example: "Food",
   })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))
@@ -57,8 +57,8 @@ export class CreateExpenseDto {
   categoryName?: string;
 
   @ApiPropertyOptional({
-    description: 'Icon used when creating a new category by name.',
-    example: '🍔',
+    description: "Icon used when creating a new category by name.",
+    example: "🍔",
   })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))
@@ -67,8 +67,8 @@ export class CreateExpenseDto {
   categoryIcon?: string;
 
   @ApiPropertyOptional({
-    description: 'Color used when creating a new category by name.',
-    example: '#FF6B6B',
+    description: "Color used when creating a new category by name.",
+    example: "#FF6B6B",
   })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))

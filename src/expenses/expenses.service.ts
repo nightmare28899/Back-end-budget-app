@@ -2,13 +2,13 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { StorageService } from '../storage/storage.service';
-import { CreateExpenseDto } from './dto/create-expense.dto';
-import { UpdateExpenseDto } from './dto/update-expense.dto';
-import { QueryExpenseDto } from './dto/query-expense.dto';
-import { Prisma } from '@prisma/client';
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
+import { CreateExpenseDto } from "./dto/create-expense.dto";
+import { UpdateExpenseDto } from "./dto/update-expense.dto";
+import { QueryExpenseDto } from "./dto/query-expense.dto";
+import { Prisma } from "@prisma/client";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
   include: { category: true };
@@ -65,7 +65,7 @@ export class ExpensesService {
         date: { gte: startOfDay, lte: endOfDay },
       },
       include: { category: true },
-      orderBy: { date: 'desc' },
+      orderBy: { date: "desc" },
     });
 
     const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
@@ -100,7 +100,7 @@ export class ExpensesService {
     }
 
     if (query.q) {
-      where.title = { contains: query.q, mode: 'insensitive' };
+      where.title = { contains: query.q, mode: "insensitive" };
     }
 
     if (query.categoryId) {
@@ -110,7 +110,7 @@ export class ExpensesService {
     const expenses = await this.prisma.expense.findMany({
       where,
       include: { category: true },
-      orderBy: { date: 'desc' },
+      orderBy: { date: "desc" },
     });
 
     const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
@@ -124,7 +124,7 @@ export class ExpensesService {
       include: { category: true },
     });
 
-    if (!expense) throw new NotFoundException('Expense not found');
+    if (!expense) throw new NotFoundException("Expense not found");
 
     if (expense.imageUrl) {
       try {
@@ -132,8 +132,8 @@ export class ExpensesService {
           expense.imageUrl,
         );
         return { ...expense, imagePresignedUrl };
-      } catch {
-        // MinIO might not be available
+      } catch (error) {
+        console.error(error);
       }
     }
 
@@ -151,7 +151,7 @@ export class ExpensesService {
       });
 
       if (!category) {
-        throw new NotFoundException('Category not found for this user');
+        throw new NotFoundException("Category not found for this user");
       }
 
       nextCategoryId = category.id;
@@ -174,8 +174,8 @@ export class ExpensesService {
     if (expense.imageUrl) {
       try {
         await this.storageService.deleteFile(expense.imageUrl);
-      } catch {
-        // Best-effort image deletion
+      } catch (error) {
+        console.error(error);
       }
     }
 
@@ -202,7 +202,7 @@ export class ExpensesService {
       });
 
       if (!category) {
-        throw new NotFoundException('Category not found for this user');
+        throw new NotFoundException("Category not found for this user");
       }
 
       return category.id;
@@ -211,13 +211,13 @@ export class ExpensesService {
     if (dto.categoryName) {
       const name = dto.categoryName.trim();
       if (!name) {
-        throw new BadRequestException('categoryName cannot be empty');
+        throw new BadRequestException("categoryName cannot be empty");
       }
 
       const existing = await this.prisma.category.findFirst({
         where: {
           userId,
-          name: { equals: name, mode: 'insensitive' },
+          name: { equals: name, mode: "insensitive" },
         },
         select: { id: true },
       });
@@ -240,7 +240,7 @@ export class ExpensesService {
     }
 
     throw new BadRequestException(
-      'A category is required. Send categoryId or categoryName.',
+      "A category is required. Send categoryId or categoryName.",
     );
   }
 }

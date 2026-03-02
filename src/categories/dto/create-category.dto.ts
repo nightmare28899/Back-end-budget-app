@@ -1,30 +1,30 @@
-import { Transform } from 'class-transformer';
+import { Transform } from "class-transformer";
 import {
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
-} from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { trimStringValue } from '../../common/dto/string-transformers';
+} from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { trimStringValue } from "../../common/dto/string-transformers";
 
 export class CreateCategoryDto {
-  @ApiProperty({ example: 'Food' })
+  @ApiProperty({ example: "Food" })
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
   @IsNotEmpty()
   @MaxLength(60)
   name: string;
 
-  @ApiPropertyOptional({ example: '🍔' })
+  @ApiPropertyOptional({ example: "🍔" })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
   @MaxLength(20)
   icon?: string;
 
-  @ApiPropertyOptional({ example: '#FF6B6B' })
+  @ApiPropertyOptional({ example: "#FF6B6B" })
   @IsOptional()
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
