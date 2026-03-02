@@ -38,6 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         dailyBudget: true,
         currency: true,
         isActive: true,
+        deletedAt: true,
       },
     });
 
@@ -45,11 +46,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException("User not found");
     }
 
-    if (!user.isActive) {
-      throw new UnauthorizedException("Account is inactive");
+    if (!user.isActive || user.deletedAt) {
+      throw new UnauthorizedException("Account is disabled");
     }
 
-    const { isActive, ...activeUser } = user;
+    const { isActive, deletedAt, ...activeUser } = user;
     return activeUser;
   }
 }

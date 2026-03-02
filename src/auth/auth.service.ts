@@ -45,6 +45,7 @@ export class AuthService {
         role: dto.role ?? "user",
         avatarUrl,
         isActive: true,
+        deletedAt: null,
       },
       select: {
         id: true,
@@ -53,13 +54,18 @@ export class AuthService {
         role: true,
         avatarUrl: true,
         isActive: true,
+        deletedAt: true,
       },
     });
 
     const tokens = await this.generateTokens(user.id, user.email);
     const authUser = await this.withAvatarPresignedUrl(user);
 
-    return { user: authUser, ...tokens };
+    return {
+      message: "User registered successfully",
+      user: authUser,
+      ...tokens,
+    };
   }
 
   async login(dto: LoginDto) {
@@ -73,6 +79,7 @@ export class AuthService {
         password: true,
         avatarUrl: true,
         isActive: true,
+        deletedAt: true,
       },
     });
 
@@ -80,8 +87,8 @@ export class AuthService {
       throw new UnauthorizedException("Invalid credentials");
     }
 
-    if (!user.isActive) {
-      throw new UnauthorizedException("Account is inactive");
+    if (!user.isActive || user.deletedAt) {
+      throw new UnauthorizedException("Account is disabled");
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.password);
@@ -100,6 +107,7 @@ export class AuthService {
     });
 
     return {
+      message: "Login successful",
       user: authUser,
       ...tokens,
     };
@@ -113,19 +121,26 @@ export class AuthService {
 
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true, isActive: true },
+        select: { id: true, email: true, isActive: true, deletedAt: true },
       });
 
       if (!user) {
         throw new UnauthorizedException("User not found");
       }
 
-      if (!user.isActive) {
-        throw new UnauthorizedException("Account is inactive");
+      if (!user.isActive || user.deletedAt) {
+        throw new UnauthorizedException("Account is disabled");
       }
 
-      return this.generateTokens(user.id, user.email);
-    } catch {
+      const tokens = await this.generateTokens(user.id, user.email);
+      return {
+        message: "Tokens refreshed successfully",
+        ...tokens,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       throw new UnauthorizedException("Invalid refresh token");
     }
   }

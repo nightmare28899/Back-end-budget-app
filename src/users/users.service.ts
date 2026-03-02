@@ -1,7 +1,30 @@
-import { Injectable } from "@nestjs/common";
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { StorageService } from "../storage/storage.service";
+import { CreateUserDto } from "./dto/create-user.dto";
+import { QueryUsersDto } from "./dto/query-users.dto";
+import type { CurrentUserType } from "../common/types/current-user.type";
+
+const userSelect = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  avatarUrl: true,
+  dailyBudget: true,
+  currency: true,
+  isActive: true,
+  deletedAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 @Injectable()
 export class UsersService {
@@ -10,20 +33,90 @@ export class UsersService {
     private readonly storageService: StorageService,
   ) {}
 
+  async create(currentUser: CurrentUserType, dto: CreateUserDto) {
+    if (currentUser.role !== "admin") {
+      throw new ForbiddenException("Only administrators can create users");
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+
+    if (existing) {
+      throw new ConflictException("Email already registered");
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
+    const user = await this.prisma.user.create({
+      data: {
+        email: dto.email,
+        name: dto.name,
+        password: hashedPassword,
+        role: dto.role ?? "user",
+        dailyBudget: dto.dailyBudget,
+        currency: dto.currency,
+        isActive: true,
+        deletedAt: null,
+      },
+      select: userSelect,
+    });
+
+    return this.withAvatarPresignedUrl(user);
+  }
+
+  async findAll(currentUser: CurrentUserType, query: QueryUsersDto) {
+    const includeDisabled = query.includeDisabled === true;
+    const where =
+      currentUser.role === "admin"
+        ? {
+            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+          }
+        : {
+            id: currentUser.id,
+            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+          };
+
+    const users = await this.prisma.user.findMany({
+      where,
+      select: userSelect,
+      orderBy: { createdAt: "desc" },
+    });
+
+    return this.withAvatarPresignedUrls(users);
+  }
+
+  async findOne(
+    userId: string,
+    currentUser: CurrentUserType,
+    includeDisabled = false,
+  ) {
+    this.assertCanManageUser(currentUser, userId);
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: userId,
+        ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+      },
+      select: userSelect,
+    });
+
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+
+    return this.withAvatarPresignedUrl(user);
+  }
+
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        avatarUrl: true,
-        dailyBudget: true,
-        currency: true,
-        createdAt: true,
-      },
+      select: userSelect,
     });
+
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
 
     return this.withAvatarPresignedUrl(user);
   }
@@ -33,10 +126,66 @@ export class UsersService {
     dto: UpdateUserDto,
     avatarFile?: Express.Multer.File,
   ) {
+    return this.updateUser(userId, dto, avatarFile);
+  }
+
+  async update(
+    userId: string,
+    currentUser: CurrentUserType,
+    dto: UpdateUserDto,
+    avatarFile?: Express.Multer.File,
+  ) {
+    this.assertCanManageUser(currentUser, userId);
+    return this.updateUser(userId, dto, avatarFile);
+  }
+
+  async disable(userId: string, currentUser: CurrentUserType) {
+    this.assertCanManageUser(currentUser, userId);
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        isActive: true,
+        deletedAt: true,
+      },
+    });
+
+    if (!existingUser) {
+      throw new NotFoundException("User not found");
+    }
+
+    if (!existingUser.isActive && existingUser.deletedAt) {
+      return existingUser;
+    }
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: false,
+        deletedAt: new Date(),
+      },
+      select: {
+        id: true,
+        isActive: true,
+        deletedAt: true,
+      },
+    });
+  }
+
+  private async updateUser(
+    userId: string,
+    dto: UpdateUserDto,
+    avatarFile?: Express.Multer.File,
+  ) {
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { avatarUrl: true },
+      select: { id: true, avatarUrl: true },
     });
+
+    if (!current) {
+      throw new NotFoundException("User not found");
+    }
 
     let nextAvatarKey: string | undefined;
 
@@ -53,15 +202,7 @@ export class UsersService {
         ...dto,
         avatarUrl: nextAvatarKey ?? undefined,
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        avatarUrl: true,
-        dailyBudget: true,
-        currency: true,
-      },
+      select: userSelect,
     });
 
     if (
@@ -77,6 +218,24 @@ export class UsersService {
     }
 
     return this.withAvatarPresignedUrl(user);
+  }
+
+  private assertCanManageUser(currentUser: CurrentUserType, targetUserId: string) {
+    if (currentUser.role === "admin") {
+      return;
+    }
+
+    if (currentUser.id === targetUserId) {
+      return;
+    }
+
+    throw new ForbiddenException("You can only manage your own account");
+  }
+
+  private async withAvatarPresignedUrls<
+    T extends { avatarUrl: string | null },
+  >(users: T[]) {
+    return Promise.all(users.map((user) => this.withAvatarPresignedUrl(user)));
   }
 
   private async withAvatarPresignedUrl<T extends { avatarUrl: string | null }>(
