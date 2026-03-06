@@ -21,7 +21,7 @@ export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
   @Post("send-weekly")
-  @ApiOperation({ summary: "Manually trigger weekly report email" })
+  @ApiOperation({ summary: "Manually trigger budget report email" })
   @ApiBody({ type: SendWeeklyReportDto, required: false })
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   async sendWeeklyReport(

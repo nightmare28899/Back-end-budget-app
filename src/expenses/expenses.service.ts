@@ -9,6 +9,10 @@ import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
 import { QueryExpenseDto } from "./dto/query-expense.dto";
 import { Prisma } from "@prisma/client";
+import {
+  formatDateOnly,
+  resolveBudgetWindow,
+} from "../common/budget/budget.utils";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
   include: { category: true };
@@ -72,17 +76,49 @@ export class ExpensesService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { dailyBudget: true },
+      select: {
+        dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
+      },
     });
+
+    const budgetWindow = resolveBudgetWindow({
+      budgetAmount: user?.budgetAmount,
+      dailyBudget: user?.dailyBudget,
+      budgetPeriod: user?.budgetPeriod,
+      budgetPeriodStart: user?.budgetPeriodStart,
+      budgetPeriodEnd: user?.budgetPeriodEnd,
+    });
+
+    const aggregatedPeriodExpenses = await this.prisma.expense.aggregate({
+      where: {
+        userId,
+        date: { gte: budgetWindow.start, lte: budgetWindow.end },
+      },
+      _sum: { cost: true },
+    });
+
+    const spentInBudgetPeriod = Number(aggregatedPeriodExpenses._sum.cost ?? 0);
+    const remaining = budgetWindow.amount - spentInBudgetPeriod;
+    const percentage =
+      budgetWindow.amount > 0
+        ? Math.round((spentInBudgetPeriod / budgetWindow.amount) * 100)
+        : 0;
 
     return {
       expenses,
       total,
-      dailyBudget: Number(user?.dailyBudget ?? 0),
-      remaining: Number(user?.dailyBudget ?? 0) - total,
-      percentage: user?.dailyBudget
-        ? Math.round((total / Number(user.dailyBudget)) * 100)
-        : 0,
+      dailyBudget: budgetWindow.amount,
+      budgetAmount: budgetWindow.amount,
+      budgetPeriod: budgetWindow.period,
+      budgetPeriodStart: formatDateOnly(budgetWindow.start),
+      budgetPeriodEnd: formatDateOnly(budgetWindow.end),
+      spentInBudgetPeriod: Math.round(spentInBudgetPeriod * 100) / 100,
+      remaining: Math.round(remaining * 100) / 100,
+      percentage,
     };
   }
 

@@ -53,6 +53,12 @@ export class AuthService {
         name: true,
         role: true,
         avatarUrl: true,
+        dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
+        currency: true,
         isActive: true,
         deletedAt: true,
       },
@@ -78,6 +84,12 @@ export class AuthService {
         role: true,
         password: true,
         avatarUrl: true,
+        dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
+        currency: true,
         isActive: true,
         deletedAt: true,
       },
@@ -104,6 +116,12 @@ export class AuthService {
       name: user.name,
       role: user.role,
       avatarUrl: user.avatarUrl,
+      dailyBudget: user.dailyBudget,
+      budgetAmount: user.budgetAmount,
+      budgetPeriod: user.budgetPeriod,
+      budgetPeriodStart: user.budgetPeriodStart,
+      budgetPeriodEnd: user.budgetPeriodEnd,
+      currency: user.currency,
     });
 
     return {
@@ -121,7 +139,21 @@ export class AuthService {
 
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true, isActive: true, deletedAt: true },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          avatarUrl: true,
+          dailyBudget: true,
+          budgetAmount: true,
+          budgetPeriod: true,
+          budgetPeriodStart: true,
+          budgetPeriodEnd: true,
+          currency: true,
+          isActive: true,
+          deletedAt: true,
+        },
       });
 
       if (!user) {
@@ -133,8 +165,12 @@ export class AuthService {
       }
 
       const tokens = await this.generateTokens(user.id, user.email);
+      const { isActive, deletedAt, ...activeUser } = user;
+      const authUser = await this.withAvatarPresignedUrl(activeUser);
+
       return {
-        message: "Tokens refreshed successfully",
+        message: "Session renewed successfully",
+        user: authUser,
         ...tokens,
       };
     } catch (error) {

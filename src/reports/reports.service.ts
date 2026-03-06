@@ -13,6 +13,7 @@ import {
   CategoryBreakdownItem,
   WeeklySummary,
 } from "../analytics/analytics.service";
+import { getBudgetPeriodLabel } from "../common/budget/budget.utils";
 
 @Injectable()
 export class ReportsService {
@@ -55,7 +56,7 @@ export class ReportsService {
   }
 
   async sendReportForUser(userId: string, email: string, name: string) {
-    const summary = await this.analyticsService.getWeeklySummary(userId);
+    const summary = await this.analyticsService.getBudgetSummary(userId);
     const categories = await this.analyticsService.getCategoryBreakdown(
       userId,
       summary.period.start,
@@ -63,6 +64,7 @@ export class ReportsService {
     );
 
     const html = this.generateEmailHtml(name, summary, categories);
+    const periodLabel = this.getReportPeriodLabel(summary.period.type);
 
     try {
       await this.transporter.sendMail({
@@ -71,7 +73,7 @@ export class ReportsService {
           "noreply@budgetapp.com",
         ),
         to: email,
-        subject: `💰 Your Weekly Budget Report (${summary.period.start} - ${summary.period.end})`,
+        subject: `💰 Your ${periodLabel} Budget Report (${summary.period.start} - ${summary.period.end})`,
         html,
       });
     } catch (error) {
@@ -105,6 +107,7 @@ export class ReportsService {
     summary: WeeklySummary,
     categories: CategoryBreakdownItem[],
   ): string {
+    const periodLabel = this.getReportPeriodLabel(summary.period.type);
     const categoryRows = categories
       .map(
         (c) => `
@@ -146,12 +149,12 @@ export class ReportsService {
       <body>
         <div class="container">
           <div class="header">
-            <h1>💰 Weekly Budget Report</h1>
+            <h1>💰 ${periodLabel} Budget Report</h1>
             <p>${summary.period.start} — ${summary.period.end}</p>
           </div>
           <div class="content">
             <p>Hi ${name},</p>
-            <p>Here's your spending summary for this week:</p>
+            <p>Here's your spending summary for this budget period:</p>
             
             <table>
               <tr>
@@ -161,8 +164,8 @@ export class ReportsService {
                 </td>
               </tr>
               <tr>
-                <td style="padding: 8px 0;">Weekly Budget</td>
-                <td style="padding: 8px 0; text-align: right;">$${summary.weeklyBudget.toFixed(2)}</td>
+                <td style="padding: 8px 0;">${periodLabel} Budget</td>
+                <td style="padding: 8px 0; text-align: right;">$${summary.budgetAmount.toFixed(2)}</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;">Remaining</td>
@@ -206,5 +209,9 @@ export class ReportsService {
       </body>
       </html>
     `;
+  }
+
+  private getReportPeriodLabel(period: WeeklySummary["period"]["type"]) {
+    return getBudgetPeriodLabel(period);
   }
 }

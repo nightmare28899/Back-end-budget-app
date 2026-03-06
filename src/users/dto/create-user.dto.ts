@@ -1,5 +1,6 @@
 import { Transform, Type } from "class-transformer";
 import {
+  IsDateString,
   IsEmail,
   IsIn,
   IsNumber,
@@ -16,6 +17,7 @@ import {
   trimStringValue,
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
+import { BUDGET_PERIOD_VALUES } from "../../common/budget/budget.utils";
 
 export class CreateUserDto {
   @ApiProperty({ example: "john@example.com" })
@@ -44,12 +46,53 @@ export class CreateUserDto {
   @IsIn(["user", "admin"])
   role?: string;
 
-  @ApiPropertyOptional({ example: 500.0 })
+  @ApiPropertyOptional({
+    example: 500,
+    description: "Legacy alias for budgetAmount",
+    deprecated: true,
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   dailyBudget?: number;
+
+  @ApiPropertyOptional({
+    example: 3500,
+    description: "Budget amount for the selected budgetPeriod",
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  budgetAmount?: number;
+
+  @ApiPropertyOptional({
+    example: "weekly",
+    enum: BUDGET_PERIOD_VALUES,
+    default: "daily",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimLowerCaseStringValue(value as unknown))
+  @IsString()
+  @IsIn([...BUDGET_PERIOD_VALUES])
+  budgetPeriod?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-03-01",
+    description: "Required when budgetPeriod is 'period'",
+  })
+  @IsOptional()
+  @IsDateString()
+  budgetPeriodStart?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-03-31",
+    description: "Required when budgetPeriod is 'period'",
+  })
+  @IsOptional()
+  @IsDateString()
+  budgetPeriodEnd?: string;
 
   @ApiPropertyOptional({ example: "MXN" })
   @IsOptional()

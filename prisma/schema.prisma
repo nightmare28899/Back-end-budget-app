@@ -6,6 +6,13 @@ datasource db {
   provider = "postgresql"
 }
 
+enum BillingCycle {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
 model User {
   id          String     @id @default(uuid())
   email       String     @unique
@@ -14,6 +21,10 @@ model User {
   role        String     @default("user")
   avatarUrl   String?
   dailyBudget Decimal    @default(0) @db.Decimal(10, 2)
+  budgetAmount Decimal   @default(0) @db.Decimal(10, 2)
+  budgetPeriod String    @default("daily")
+  budgetPeriodStart DateTime?
+  budgetPeriodEnd DateTime?
   currency    String     @default("MXN")
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -21,6 +32,7 @@ model User {
   deletedAt   DateTime?  @map("deleted_at")
   categories  Category[]
   expenses    Expense[]
+  subscriptions Subscription[]
 
   @@map("users")
 }
@@ -42,6 +54,8 @@ model Expense {
   id         String    @id @default(uuid())
   title      String
   cost       Decimal   @db.Decimal(10, 2)
+  isSubscription Boolean @default(false)
+  subscriptionId String?
   imageUrl   String?
   note       String?
   date       DateTime  @default(now())
@@ -50,9 +64,34 @@ model Expense {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   category   Category? @relation(fields: [categoryId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
   @@index([userId, categoryId])
+  @@index([userId, isSubscription, date])
+  @@index([subscriptionId])
   @@map("expenses")
+}
+
+model Subscription {
+  id              String       @id @default(uuid())
+  name            String
+  cost            Decimal      @db.Decimal(10, 2)
+  currency        String       @default("MXN")
+  billingCycle    BillingCycle @default(MONTHLY)
+  nextPaymentDate DateTime
+  reminderDays    Int          @default(3)
+  isActive        Boolean      @default(true)
+  logoUrl         String?
+  hexColor        String?
+  userId          String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  expenses        Expense[]
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, nextPaymentDate])
+  @@index([userId, isActive])
+  @@map("subscriptions")
 }

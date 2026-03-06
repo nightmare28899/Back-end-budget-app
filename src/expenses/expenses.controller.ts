@@ -48,7 +48,10 @@ export class ExpensesController {
   }
 
   @Get("today")
-  @ApiOperation({ summary: "Get today's expenses with budget summary" })
+  @ApiOperation({
+    summary:
+      "Get today's expenses with summary for the configured budget period",
+  })
   async findToday(@CurrentUser() user: CurrentUserType) {
     return this.expensesService.findToday(user.id);
   }

@@ -12,6 +12,7 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main.js",
+    "seed:test-subscriptions": "node prisma/seed-test-subscriptions.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest --watchman=false --passWithNoTests",
     "test:watch": "jest --watch",

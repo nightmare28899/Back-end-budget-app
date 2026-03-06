@@ -64,8 +64,8 @@ export class AuthController {
 
   @Post("refresh")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Refresh access token" })
-  @ApiResponse({ status: 200, description: "Tokens refreshed" })
+  @ApiOperation({ summary: "Renew session with refresh token" })
+  @ApiResponse({ status: 200, description: "Session renewed successfully" })
   @ApiResponse({ status: 401, description: "Invalid refresh token" })
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(@Body() dto: RefreshTokenDto) {

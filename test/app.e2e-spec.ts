@@ -54,4 +54,18 @@ describe("AppController (e2e)", () => {
       .send({})
       .expect(400);
   });
+
+  it("/auth/refresh (POST) validates body", () => {
+    return request(app.getHttpServer())
+      .post("/auth/refresh")
+      .send({})
+      .expect(400);
+  });
+
+  it("/auth/refresh (POST) rejects invalid token", () => {
+    return request(app.getHttpServer())
+      .post("/auth/refresh")
+      .send({ refreshToken: "not-a-valid-token" })
+      .expect(401);
+  });
 });

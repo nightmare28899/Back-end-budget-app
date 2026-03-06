@@ -1,16 +1,22 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { StorageService } from "../storage/storage.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { QueryUsersDto } from "./dto/query-users.dto";
 import type { CurrentUserType } from "../common/types/current-user.type";
+import {
+  type BudgetPeriod,
+  normalizeBudgetPeriod,
+} from "../common/budget/budget.utils";
 
 const userSelect = {
   id: true,
@@ -19,12 +25,24 @@ const userSelect = {
   role: true,
   avatarUrl: true,
   dailyBudget: true,
+  budgetAmount: true,
+  budgetPeriod: true,
+  budgetPeriodStart: true,
+  budgetPeriodEnd: true,
   currency: true,
   isActive: true,
   deletedAt: true,
   createdAt: true,
   updatedAt: true,
 } as const;
+
+interface UserBudgetSnapshot {
+  dailyBudget: Prisma.Decimal;
+  budgetAmount: Prisma.Decimal;
+  budgetPeriod: string;
+  budgetPeriodStart: Date | null;
+  budgetPeriodEnd: Date | null;
+}
 
 @Injectable()
 export class UsersService {
@@ -34,7 +52,7 @@ export class UsersService {
   ) {}
 
   async create(currentUser: CurrentUserType, dto: CreateUserDto) {
-    if (currentUser.role !== "admin") {
+    if (currentUser.role.toLowerCase() !== "admin") {
       throw new ForbiddenException("Only administrators can create users");
     }
 
@@ -48,13 +66,14 @@ export class UsersService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
+    const budgetData = this.resolveBudgetForCreate(dto);
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
         name: dto.name,
         password: hashedPassword,
         role: dto.role ?? "user",
-        dailyBudget: dto.dailyBudget,
+        ...budgetData,
         currency: dto.currency,
         isActive: true,
         deletedAt: null,
@@ -68,14 +87,14 @@ export class UsersService {
   async findAll(currentUser: CurrentUserType, query: QueryUsersDto) {
     const includeDisabled = query.includeDisabled === true;
     const where =
-      currentUser.role === "admin"
+      currentUser.role.toLowerCase() === "admin"
         ? {
-            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
-          }
+          ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+        }
         : {
-            id: currentUser.id,
-            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
-          };
+          id: currentUser.id,
+          ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+        };
 
     const users = await this.prisma.user.findMany({
       where,
@@ -180,7 +199,15 @@ export class UsersService {
   ) {
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, avatarUrl: true },
+      select: {
+        id: true,
+        avatarUrl: true,
+        dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
+      },
     });
 
     if (!current) {
@@ -196,10 +223,14 @@ export class UsersService {
       );
     }
 
+    const budgetData = this.resolveBudgetForUpdate(dto, current);
+
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        ...dto,
+        name: dto.name,
+        currency: dto.currency,
+        ...budgetData,
         avatarUrl: nextAvatarKey ?? undefined,
       },
       select: userSelect,
@@ -221,7 +252,7 @@ export class UsersService {
   }
 
   private assertCanManageUser(currentUser: CurrentUserType, targetUserId: string) {
-    if (currentUser.role === "admin") {
+    if (currentUser.role.toLowerCase() === "admin") {
       return;
     }
 
@@ -257,6 +288,112 @@ export class UsersService {
     } catch (error) {
       console.error("Failed to generate presigned URL for avatar:", error);
       return { ...user, avatarKey };
+    }
+  }
+
+  private resolveBudgetForCreate(dto: CreateUserDto) {
+    const budgetAmount = dto.budgetAmount ?? dto.dailyBudget ?? 0;
+    const budgetPeriod = normalizeBudgetPeriod(dto.budgetPeriod);
+    const budgetPeriodStart = dto.budgetPeriodStart
+      ? new Date(dto.budgetPeriodStart)
+      : null;
+    const budgetPeriodEnd = dto.budgetPeriodEnd
+      ? new Date(dto.budgetPeriodEnd)
+      : null;
+
+    this.assertBudgetConfiguration(
+      budgetPeriod,
+      budgetPeriodStart,
+      budgetPeriodEnd,
+      dto.budgetPeriodStart !== undefined || dto.budgetPeriodEnd !== undefined,
+    );
+
+    return {
+      dailyBudget: budgetAmount,
+      budgetAmount,
+      budgetPeriod,
+      budgetPeriodStart: budgetPeriod === "period" ? budgetPeriodStart : null,
+      budgetPeriodEnd: budgetPeriod === "period" ? budgetPeriodEnd : null,
+    };
+  }
+
+  private resolveBudgetForUpdate(
+    dto: UpdateUserDto,
+    current: UserBudgetSnapshot,
+  ): Prisma.UserUpdateInput {
+    const budgetTouched =
+      dto.budgetAmount !== undefined ||
+      dto.dailyBudget !== undefined ||
+      dto.budgetPeriod !== undefined ||
+      dto.budgetPeriodStart !== undefined ||
+      dto.budgetPeriodEnd !== undefined;
+
+    if (!budgetTouched) {
+      return {};
+    }
+
+    const nextBudgetAmount =
+      dto.budgetAmount ??
+      dto.dailyBudget ??
+      Number(current.budgetAmount ?? current.dailyBudget);
+
+    const nextBudgetPeriod =
+      dto.budgetPeriod !== undefined
+        ? normalizeBudgetPeriod(dto.budgetPeriod)
+        : normalizeBudgetPeriod(current.budgetPeriod);
+
+    const nextBudgetPeriodStart =
+      dto.budgetPeriodStart !== undefined
+        ? new Date(dto.budgetPeriodStart)
+        : current.budgetPeriodStart;
+
+    const nextBudgetPeriodEnd =
+      dto.budgetPeriodEnd !== undefined
+        ? new Date(dto.budgetPeriodEnd)
+        : current.budgetPeriodEnd;
+
+    this.assertBudgetConfiguration(
+      nextBudgetPeriod,
+      nextBudgetPeriodStart,
+      nextBudgetPeriodEnd,
+      dto.budgetPeriodStart !== undefined || dto.budgetPeriodEnd !== undefined,
+    );
+
+    return {
+      dailyBudget: nextBudgetAmount,
+      budgetAmount: nextBudgetAmount,
+      budgetPeriod: nextBudgetPeriod,
+      budgetPeriodStart:
+        nextBudgetPeriod === "period" ? nextBudgetPeriodStart : null,
+      budgetPeriodEnd: nextBudgetPeriod === "period" ? nextBudgetPeriodEnd : null,
+    };
+  }
+
+  private assertBudgetConfiguration(
+    period: BudgetPeriod,
+    start: Date | null,
+    end: Date | null,
+    hasPeriodDatesInRequest: boolean,
+  ) {
+    if (period !== "period") {
+      if (hasPeriodDatesInRequest) {
+        throw new BadRequestException(
+          "budgetPeriodStart and budgetPeriodEnd can only be set when budgetPeriod is 'period'",
+        );
+      }
+      return;
+    }
+
+    if (!start || !end) {
+      throw new BadRequestException(
+        "budgetPeriodStart and budgetPeriodEnd are required when budgetPeriod is 'period'",
+      );
+    }
+
+    if (end < start) {
+      throw new BadRequestException(
+        "budgetPeriodEnd must be greater than or equal to budgetPeriodStart",
+      );
     }
   }
 }

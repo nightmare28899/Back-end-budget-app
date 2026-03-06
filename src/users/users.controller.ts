@@ -97,14 +97,22 @@ export class UsersController {
   }
 
   @Patch("me")
-  @ApiOperation({ summary: "Update current user profile / daily budget" })
+  @ApiOperation({ summary: "Update current user profile / budget settings" })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
       type: "object",
       properties: {
         name: { type: "string" },
-        dailyBudget: { type: "number" },
+        dailyBudget: { type: "number", deprecated: true },
+        budgetAmount: { type: "number" },
+        budgetPeriod: {
+          type: "string",
+          enum: ["daily", "weekly", "monthly", "annual", "period"],
+          default: "daily",
+        },
+        budgetPeriodStart: { type: "string", format: "date-time" },
+        budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         avatar: { type: "string", format: "binary" },
       },
@@ -132,7 +140,15 @@ export class UsersController {
       type: "object",
       properties: {
         name: { type: "string" },
-        dailyBudget: { type: "number" },
+        dailyBudget: { type: "number", deprecated: true },
+        budgetAmount: { type: "number" },
+        budgetPeriod: {
+          type: "string",
+          enum: ["daily", "weekly", "monthly", "annual", "period"],
+          default: "daily",
+        },
+        budgetPeriodStart: { type: "string", format: "date-time" },
+        budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         avatar: { type: "string", format: "binary" },
       },

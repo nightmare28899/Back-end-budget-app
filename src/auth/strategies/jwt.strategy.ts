@@ -36,6 +36,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         name: true,
         role: true,
         dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
         currency: true,
         isActive: true,
         deletedAt: true,
@@ -51,6 +55,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const { isActive, deletedAt, ...activeUser } = user;
-    return activeUser;
+    return {
+      ...activeUser,
+      dailyBudget: Number(activeUser.dailyBudget),
+      budgetAmount: Number(activeUser.budgetAmount),
+      budgetPeriodStart: activeUser.budgetPeriodStart
+        ? activeUser.budgetPeriodStart.toISOString()
+        : null,
+      budgetPeriodEnd: activeUser.budgetPeriodEnd
+        ? activeUser.budgetPeriodEnd.toISOString()
+        : null,
+    };
   }
 }

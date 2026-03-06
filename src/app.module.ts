@@ -11,6 +11,8 @@ import { CategoriesModule } from "./categories/categories.module";
 import { ExpensesModule } from "./expenses/expenses.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { ReportsModule } from "./reports/reports.module";
+import { SubscriptionsModule } from "./subscriptions/subscriptions.module";
+import { HistoryModule } from "./history/history.module";
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { ReportsModule } from "./reports/reports.module";
     ExpensesModule,
     AnalyticsModule,
     ReportsModule,
+    SubscriptionsModule,
+    HistoryModule,
   ],
   providers: [
     {

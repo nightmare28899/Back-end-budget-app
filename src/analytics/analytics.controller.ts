@@ -41,8 +41,18 @@ export class AnalyticsController {
   }
 
   @Get("weekly-summary")
-  @ApiOperation({ summary: "Get current week spending summary" })
+  @ApiOperation({
+    summary: "Get summary for the currently configured budget period",
+  })
   async getWeeklySummary(@CurrentUser() user: CurrentUserType) {
     return this.analyticsService.getWeeklySummary(user.id);
+  }
+
+  @Get("budget-summary")
+  @ApiOperation({
+    summary: "Get summary for the currently configured budget period",
+  })
+  async getBudgetSummary(@CurrentUser() user: CurrentUserType) {
+    return this.analyticsService.getBudgetSummary(user.id);
   }
 }

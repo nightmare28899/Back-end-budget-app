@@ -1,4 +1,6 @@
 import {
+  IsDateString,
+  IsIn,
   IsOptional,
   IsString,
   IsNumber,
@@ -9,9 +11,11 @@ import {
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
 import {
+  trimLowerCaseStringValue,
   trimStringValue,
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
+import { BUDGET_PERIOD_VALUES } from "../../common/budget/budget.utils";
 
 export class UpdateUserDto {
   @ApiPropertyOptional({ example: "John Doe" })
@@ -21,12 +25,53 @@ export class UpdateUserDto {
   @MaxLength(100)
   name?: string;
 
-  @ApiPropertyOptional({ example: 500.0, description: "Daily spending budget" })
+  @ApiPropertyOptional({
+    example: 500.0,
+    description: "Legacy alias for budgetAmount",
+    deprecated: true,
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Type(() => Number)
   dailyBudget?: number;
+
+  @ApiPropertyOptional({
+    example: 3500,
+    description: "Budget amount for the selected budgetPeriod",
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  budgetAmount?: number;
+
+  @ApiPropertyOptional({
+    example: "monthly",
+    enum: BUDGET_PERIOD_VALUES,
+    default: "daily",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimLowerCaseStringValue(value as unknown))
+  @IsString()
+  @IsIn([...BUDGET_PERIOD_VALUES])
+  budgetPeriod?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-03-01",
+    description: "Required when budgetPeriod is 'period'",
+  })
+  @IsOptional()
+  @IsDateString()
+  budgetPeriodStart?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-03-31",
+    description: "Required when budgetPeriod is 'period'",
+  })
+  @IsOptional()
+  @IsDateString()
+  budgetPeriodEnd?: string;
 
   @ApiPropertyOptional({ example: "MXN" })
   @IsOptional()
