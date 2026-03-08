@@ -165,8 +165,15 @@ async function bootstrap() {
       swaggerUsername,
       swaggerPassword,
     );
+    const swaggerProtectedRoutes = [
+      `/${globalPrefix}/docs`,
+      `/${globalPrefix}/docs-json`,
+      `/${globalPrefix}/v3/api-docs`,
+      "/v3/api-docs",
+    ];
     app.use(
-      [`/${globalPrefix}/docs`, `/${globalPrefix}/docs-json`],
+      // Keep Basic Auth limited to Swagger endpoints only.
+      swaggerProtectedRoutes,
       swaggerAuthMiddleware,
     );
     const document = SwaggerModule.createDocument(app, config);
