@@ -88,6 +88,17 @@ async function bootstrap() {
     credentials: true,
   });
 
+  // Express basic auth
+  const basicAuthMiddleware = require("express-basic-auth")({
+    challenge: true,
+    users: {
+      [process.env.SWAGGER_USERNAME || "admin"]:
+        process.env.SWAGGER_PASSWORD || "admin",
+    },
+  });
+  app.use("/api/docs", basicAuthMiddleware);
+  app.use("/api/docs-json", basicAuthMiddleware);
+
   const config = new DocumentBuilder()
     .setTitle("BudgetApp API")
     .setDescription("Personal finance and expense tracking API")
@@ -96,13 +107,9 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
-  console.log("Swagger docs are public.");
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
-
-  console.log(`BudgetApp API running on http://localhost:${port}`);
-  console.log(`Swagger docs at http://localhost:${port}/${globalPrefix}/docs`);
 }
 
 void bootstrap();
