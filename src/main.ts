@@ -6,8 +6,6 @@ import helmet from "helmet";
 import { AppModule } from "./app.module";
 
 const WEAK_SECRET_VALUES = new Set([
-  "dev_jwt_secret",
-  "dev_refresh_secret",
   "changeme",
   "change-me",
   "secret",
@@ -73,9 +71,9 @@ async function bootstrap() {
   const corsOrigin = process.env.CORS_ORIGIN;
   const allowedOrigins = corsOrigin
     ? corsOrigin
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter((origin) => origin.length > 0)
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0)
     : [];
 
   if (isProduction && allowedOrigins.length === 0) {
