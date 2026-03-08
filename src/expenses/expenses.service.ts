@@ -22,6 +22,8 @@ type ExpenseWithPresignedUrl = ExpenseWithCategory & {
   imagePresignedUrl?: string;
 };
 
+const MAX_SYNC_BATCH_SIZE = 200;
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -219,6 +221,16 @@ export class ExpensesService {
   }
 
   async syncBatch(userId: string, expenses: CreateExpenseDto[]) {
+    if (!Array.isArray(expenses) || expenses.length === 0) {
+      throw new BadRequestException("At least one expense is required");
+    }
+
+    if (expenses.length > MAX_SYNC_BATCH_SIZE) {
+      throw new BadRequestException(
+        `You can sync up to ${MAX_SYNC_BATCH_SIZE} expenses per request`,
+      );
+    }
+
     const results = [];
     for (const dto of expenses) {
       const expense = await this.create(userId, dto);

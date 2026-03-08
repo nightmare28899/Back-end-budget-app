@@ -16,6 +16,7 @@ import {
   ApiQuery,
   ApiTags,
 } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
@@ -68,6 +69,7 @@ export class SubscriptionsController {
   @ApiOperation({
     summary: "Manually trigger process_subscriptions for the current user",
   })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async processSubscriptionsNow(@CurrentUser() user: CurrentUserType) {
     return this.subscriptionsWorkerService.processDueSubscriptions(
       new Date(),

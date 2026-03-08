@@ -11,8 +11,10 @@ import {
   UseInterceptors,
   UploadedFile,
   ParseUUIDPipe,
+  ParseArrayPipe,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { Throttle } from "@nestjs/throttler";
 import {
   ApiTags,
   ApiOperation,
@@ -95,9 +97,17 @@ export class ExpensesController {
 
   @Post("sync")
   @ApiOperation({ summary: "Batch sync offline expenses" })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async sync(
     @CurrentUser() user: CurrentUserType,
-    @Body() expenses: CreateExpenseDto[],
+    @Body(
+      new ParseArrayPipe({
+        items: CreateExpenseDto,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    expenses: CreateExpenseDto[],
   ) {
     return this.expensesService.syncBatch(user.id, expenses);
   }

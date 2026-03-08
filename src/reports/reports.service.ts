@@ -15,6 +15,10 @@ import {
 } from "../analytics/analytics.service";
 import { getBudgetPeriodLabel } from "../common/budget/budget.utils";
 
+function isEnabled(rawValue: string | undefined): boolean {
+  return rawValue?.trim().toLowerCase() === "true";
+}
+
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
@@ -98,7 +102,24 @@ export class ReportsService {
 
     if (!user) throw new NotFoundException("User not found");
 
-    const destinationEmail = targetEmail?.trim() || user.email;
+    const requestedEmail = targetEmail?.trim();
+    const allowEmailOverride = isEnabled(
+      this.configService.get<string>("ALLOW_REPORT_EMAIL_OVERRIDE", "false"),
+    );
+    const isOwnDestination =
+      requestedEmail?.toLowerCase() === user.email.toLowerCase();
+
+    if (requestedEmail && !isOwnDestination && !allowEmailOverride) {
+      this.logger.warn(
+        `Ignoring custom report destination for user ${user.id}: ALLOW_REPORT_EMAIL_OVERRIDE is disabled`,
+      );
+    }
+
+    const destinationEmail =
+      requestedEmail && (allowEmailOverride || isOwnDestination)
+        ? requestedEmail
+        : user.email;
+
     return this.sendReportForUser(user.id, destinationEmail, user.name);
   }
 

@@ -10,20 +10,34 @@ export class StorageService implements OnModuleInit {
   private bucket: string;
 
   constructor(private readonly configService: ConfigService) {
+    const isProduction =
+      this.configService.get<string>("NODE_ENV") === "production";
+    const accessKey = this.configService.get<string>(
+      "MINIO_ACCESS_KEY",
+      "minioadmin",
+    );
+    const secretKey = this.configService.get<string>(
+      "MINIO_SECRET_KEY",
+      "minioadmin",
+    );
+
+    if (
+      isProduction &&
+      (accessKey === "minioadmin" || secretKey === "minioadmin")
+    ) {
+      throw new Error(
+        "MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be configured with non-default values in production",
+      );
+    }
+
     this.bucket = this.configService.get<string>("MINIO_BUCKET", "receipts");
     this.minioClient = new Minio.Client({
       endPoint: this.configService.get<string>("MINIO_ENDPOINT", "localhost"),
       port: parseInt(this.configService.get<string>("MINIO_PORT", "9000"), 10),
       useSSL:
         this.configService.get<string>("MINIO_USE_SSL", "false") === "true",
-      accessKey: this.configService.get<string>(
-        "MINIO_ACCESS_KEY",
-        "minioadmin",
-      ),
-      secretKey: this.configService.get<string>(
-        "MINIO_SECRET_KEY",
-        "minioadmin",
-      ),
+      accessKey,
+      secretKey,
     });
   }
 

@@ -15,6 +15,7 @@ import { JwtStrategy } from "./strategies/jwt.strategy";
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const secret = configService.get<string>("JWT_SECRET");
+        const refreshSecret = configService.get<string>("JWT_REFRESH_SECRET");
         const expiresIn = configService.get<StringValue>(
           "JWT_EXPIRATION",
           "15m",
@@ -22,6 +23,11 @@ import { JwtStrategy } from "./strategies/jwt.strategy";
 
         if (!secret) {
           throw new Error("JWT_SECRET is not defined in the environment");
+        }
+        if (!refreshSecret) {
+          throw new Error(
+            "JWT_REFRESH_SECRET is not defined in the environment",
+          );
         }
 
         return {
