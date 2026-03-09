@@ -30,4 +30,4 @@ services:
         restart: unless-stopped
 
 volumes:
-    minio-data: 1
+    minio-data:
