@@ -2,7 +2,7 @@ services:
     backend:
         build: .
         ports:
-            - "3000:3000"
+            - "3001:3000"
         env_file:
             - .env
         depends_on:
@@ -25,11 +25,11 @@ services:
         volumes:
             - minio-data:/data
         ports:
-            - "9000:9000"
-            - "9001:9001"
+            - "9002:9000"
+            - "9003:9001"
         restart: unless-stopped
 
 volumes:
     minio-data:
-
+1
 
