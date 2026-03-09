@@ -8,11 +8,14 @@ import { ConfigService } from "@nestjs/config";
 import * as Minio from "minio";
 import { randomUUID } from "node:crypto";
 
+const DEFAULT_MINIO_OPERATION_TIMEOUT_MS = 5000;
+
 @Injectable()
 export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
   private minioClient: Minio.Client;
   private bucket: string;
+  private readonly minioOperationTimeoutMs: number;
   private readonly minioConfig: {
     endPoint: string;
     port: number;
@@ -47,9 +50,17 @@ export class StorageService implements OnModuleInit {
     const useSSL =
       this.configService.get<string>("MINIO_USE_SSL", "false") === "true";
     const region = this.configService.get<string>("MINIO_REGION");
+    const timeoutRaw = this.configService.get<string>(
+      "MINIO_OPERATION_TIMEOUT_MS",
+      `${DEFAULT_MINIO_OPERATION_TIMEOUT_MS}`,
+    );
+    const timeout = Number.parseInt(timeoutRaw, 10);
 
     if (Number.isNaN(port)) {
       throw new Error("MINIO_PORT must be a valid number");
+    }
+    if (Number.isNaN(timeout) || timeout <= 0) {
+      throw new Error("MINIO_OPERATION_TIMEOUT_MS must be a valid positive number");
     }
 
     this.minioConfig = {
@@ -58,6 +69,7 @@ export class StorageService implements OnModuleInit {
       useSSL,
       region,
     };
+    this.minioOperationTimeoutMs = timeout;
     this.bucket = this.configService.get<string>("MINIO_BUCKET", "receipts");
     this.minioClient = new Minio.Client({
       endPoint: this.minioConfig.endPoint,
@@ -70,12 +82,18 @@ export class StorageService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    this.logger.log(`MinIO target configured: ${this.describeMinioTarget()}`);
+    this.logger.log(
+      `MinIO target configured: ${this.describeMinioTarget()} (timeout=${this.minioOperationTimeoutMs}ms)`,
+    );
 
     try {
-      const exists = await this.minioClient.bucketExists(this.bucket);
+      const exists = await this.withTimeout("bucketExists", () =>
+        this.minioClient.bucketExists(this.bucket),
+      );
       if (!exists) {
-        await this.minioClient.makeBucket(this.bucket);
+        await this.withTimeout("makeBucket", () =>
+          this.minioClient.makeBucket(this.bucket),
+        );
         this.logger.log(`Bucket "${this.bucket}" created`);
       }
     } catch (error) {
@@ -95,12 +113,14 @@ export class StorageService implements OnModuleInit {
     const objectName = `${folder}/${randomUUID()}.${ext}`;
 
     try {
-      await this.minioClient.putObject(
-        this.bucket,
-        objectName,
-        file.buffer,
-        file.size,
-        { "Content-Type": file.mimetype },
+      await this.withTimeout("putObject", () =>
+        this.minioClient.putObject(
+          this.bucket,
+          objectName,
+          file.buffer,
+          file.size,
+          { "Content-Type": file.mimetype },
+        ),
       );
     } catch (error) {
       this.logger.error(
@@ -118,7 +138,9 @@ export class StorageService implements OnModuleInit {
 
   async getFileUrl(objectName: string): Promise<string> {
     try {
-      return this.minioClient.presignedGetObject(this.bucket, objectName, 3600);
+      return await this.withTimeout("presignedGetObject", () =>
+        this.minioClient.presignedGetObject(this.bucket, objectName, 3600),
+      );
     } catch (error) {
       this.logger.error(
         `MinIO presigned URL generation failed (${this.describeMinioTarget()}, object="${objectName}"): ${this.formatStorageError(
@@ -133,7 +155,9 @@ export class StorageService implements OnModuleInit {
 
   async deleteFile(objectName: string): Promise<void> {
     try {
-      await this.minioClient.removeObject(this.bucket, objectName);
+      await this.withTimeout("removeObject", () =>
+        this.minioClient.removeObject(this.bucket, objectName),
+      );
     } catch (error) {
       this.logger.error(
         `MinIO delete failed (${this.describeMinioTarget()}, object="${objectName}"): ${this.formatStorageError(
@@ -186,5 +210,35 @@ export class StorageService implements OnModuleInit {
     }
 
     return `${minioError.name}: ${minioError.message}`;
+  }
+
+  private async withTimeout<T>(
+    operationName: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const timeoutError = Object.assign(
+      new Error(
+        `MinIO operation "${operationName}" timed out after ${this.minioOperationTimeoutMs}ms`,
+      ),
+      {
+        name: "MinioOperationTimeoutError",
+        code: "ETIMEDOUT",
+      },
+    );
+
+    let timeout: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(timeoutError);
+      }, this.minioOperationTimeoutMs);
+    });
+
+    try {
+      return await Promise.race([operation(), timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 }
