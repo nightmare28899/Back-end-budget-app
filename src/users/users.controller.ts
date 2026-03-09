@@ -124,7 +124,11 @@ export class UsersController {
     @Body() dto: UpdateUserDto,
     @UploadedFile() avatar?: Express.Multer.File,
   ) {
-    const updatedUser = await this.usersService.updateProfile(user.id, dto, avatar);
+    const updatedUser = await this.usersService.updateProfile(
+      user.id,
+      dto,
+      avatar,
+    );
 
     return {
       message: "User profile updated successfully",

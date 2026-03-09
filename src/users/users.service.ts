@@ -89,12 +89,12 @@ export class UsersService {
     const where =
       currentUser.role.toLowerCase() === "admin"
         ? {
-          ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
-        }
+            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+          }
         : {
-          id: currentUser.id,
-          ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
-        };
+            id: currentUser.id,
+            ...(includeDisabled ? {} : { isActive: true, deletedAt: null }),
+          };
 
     const users = await this.prisma.user.findMany({
       where,
@@ -251,7 +251,10 @@ export class UsersService {
     return this.withAvatarPresignedUrl(user);
   }
 
-  private assertCanManageUser(currentUser: CurrentUserType, targetUserId: string) {
+  private assertCanManageUser(
+    currentUser: CurrentUserType,
+    targetUserId: string,
+  ) {
     if (currentUser.role.toLowerCase() === "admin") {
       return;
     }
@@ -263,9 +266,9 @@ export class UsersService {
     throw new ForbiddenException("You can only manage your own account");
   }
 
-  private async withAvatarPresignedUrls<
-    T extends { avatarUrl: string | null },
-  >(users: T[]) {
+  private async withAvatarPresignedUrls<T extends { avatarUrl: string | null }>(
+    users: T[],
+  ) {
     return Promise.all(users.map((user) => this.withAvatarPresignedUrl(user)));
   }
 
@@ -365,7 +368,8 @@ export class UsersService {
       budgetPeriod: nextBudgetPeriod,
       budgetPeriodStart:
         nextBudgetPeriod === "period" ? nextBudgetPeriodStart : null,
-      budgetPeriodEnd: nextBudgetPeriod === "period" ? nextBudgetPeriodEnd : null,
+      budgetPeriodEnd:
+        nextBudgetPeriod === "period" ? nextBudgetPeriodEnd : null,
     };
   }
 
