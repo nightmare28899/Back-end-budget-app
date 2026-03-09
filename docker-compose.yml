@@ -8,20 +8,20 @@ services:
         depends_on:
             - minio
         environment:
-            MINIO_ENDPOINT: minio
-            MINIO_PORT: "9000"
-            MINIO_ACCESS_KEY: budgetappadmin
-            MINIO_SECRET_KEY: SuperStrongPass123!
-            MINIO_BUCKET: app-uploads
-            MINIO_USE_SSL: "false"
+            MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+            MINIO_PORT: ${MINIO_PORT:-9000}
+            MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+            MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+            MINIO_BUCKET: ${MINIO_BUCKET:-app-uploads}
+            MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
 
     minio:
         image: minio/minio:latest
         container_name: minio
         command: server /data --console-address ":9001"
         environment:
-            MINIO_ROOT_USER: budgetappadmin
-            MINIO_ROOT_PASSWORD: SuperStrongPass123!
+            MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+            MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
         volumes:
             - minio-data:/data
         ports:

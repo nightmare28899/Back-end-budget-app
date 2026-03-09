@@ -4,7 +4,6 @@ import {
   ApiTags,
   ApiOperation,
   ApiBearerAuth,
-  ApiExcludeEndpoint,
 } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { ReportsService } from "./reports.service";
@@ -31,13 +30,4 @@ export class ReportsController {
     return this.reportsService.sendManualReport(user.id, dto?.email);
   }
 
-  @Post("send-weekley")
-  @ApiExcludeEndpoint()
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  async sendWeeklyReportAlias(
-    @CurrentUser() user: CurrentUserType,
-    @Body() dto: SendWeeklyReportDto,
-  ) {
-    return this.reportsService.sendManualReport(user.id, dto?.email);
-  }
 }
