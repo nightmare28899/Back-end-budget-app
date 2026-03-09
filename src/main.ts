@@ -88,7 +88,6 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Express basic auth
   const basicAuthMiddleware = require("express-basic-auth")({
     challenge: true,
     users: {
