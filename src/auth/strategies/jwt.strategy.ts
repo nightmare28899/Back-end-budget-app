@@ -54,16 +54,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException("Account is disabled");
     }
 
-    const { isActive, deletedAt, ...activeUser } = user;
     return {
-      ...activeUser,
-      dailyBudget: Number(activeUser.dailyBudget),
-      budgetAmount: Number(activeUser.budgetAmount),
-      budgetPeriodStart: activeUser.budgetPeriodStart
-        ? activeUser.budgetPeriodStart.toISOString()
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      currency: user.currency,
+      budgetPeriod: user.budgetPeriod,
+      dailyBudget: Number(user.dailyBudget),
+      budgetAmount: Number(user.budgetAmount),
+      budgetPeriodStart: user.budgetPeriodStart
+        ? user.budgetPeriodStart.toISOString()
         : null,
-      budgetPeriodEnd: activeUser.budgetPeriodEnd
-        ? activeUser.budgetPeriodEnd.toISOString()
+      budgetPeriodEnd: user.budgetPeriodEnd
+        ? user.budgetPeriodEnd.toISOString()
         : null,
     };
   }

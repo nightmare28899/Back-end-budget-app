@@ -1,10 +1,5 @@
 import { Body, Controller, Post, UseGuards } from "@nestjs/common";
-import {
-  ApiBody,
-  ApiTags,
-  ApiOperation,
-  ApiBearerAuth,
-} from "@nestjs/swagger";
+import { ApiBody, ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { ReportsService } from "./reports.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -29,5 +24,4 @@ export class ReportsController {
   ) {
     return this.reportsService.sendManualReport(user.id, dto?.email);
   }
-
 }

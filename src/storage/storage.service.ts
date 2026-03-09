@@ -44,7 +44,10 @@ export class StorageService implements OnModuleInit {
       );
     }
 
-    const endPoint = this.configService.get<string>("MINIO_ENDPOINT", "localhost");
+    const endPoint = this.configService.get<string>(
+      "MINIO_ENDPOINT",
+      "localhost",
+    );
     const portRaw = this.configService.get<string>("MINIO_PORT", "9000");
     const port = Number.parseInt(portRaw, 10);
     const useSSL =
@@ -60,7 +63,9 @@ export class StorageService implements OnModuleInit {
       throw new Error("MINIO_PORT must be a valid number");
     }
     if (Number.isNaN(timeout) || timeout <= 0) {
-      throw new Error("MINIO_OPERATION_TIMEOUT_MS must be a valid positive number");
+      throw new Error(
+        "MINIO_OPERATION_TIMEOUT_MS must be a valid positive number",
+      );
     }
 
     this.minioConfig = {
