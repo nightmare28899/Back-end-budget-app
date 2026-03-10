@@ -69,6 +69,7 @@ export class SubscriptionsWorkerService {
             userId: subscription.userId,
             title: `${subscription.name} subscription`,
             cost: subscription.cost,
+            paymentMethod: subscription.paymentMethod,
             date: dueDate,
             note: `Auto-generated from subscription ${subscription.name}`,
             isSubscription: true,

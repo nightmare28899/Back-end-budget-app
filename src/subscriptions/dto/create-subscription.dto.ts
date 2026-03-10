@@ -26,6 +26,8 @@ export const BILLING_CYCLE_VALUES = [
   "YEARLY",
 ] as const;
 
+export const PAYMENT_METHOD_VALUES = ["CASH", "CARD"] as const;
+
 export class CreateSubscriptionDto {
   @ApiProperty({ example: "Netflix" })
   @Transform(({ value }) => trimStringValue(value as unknown))
@@ -38,6 +40,17 @@ export class CreateSubscriptionDto {
   @IsNumber()
   @Min(0)
   cost: number;
+
+  @ApiPropertyOptional({
+    example: "CARD",
+    enum: PAYMENT_METHOD_VALUES,
+    default: "CARD",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
+  @IsString()
+  @IsIn([...PAYMENT_METHOD_VALUES])
+  paymentMethod?: string;
 
   @ApiPropertyOptional({ example: "MXN", default: "MXN" })
   @IsOptional()
