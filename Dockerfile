@@ -3,8 +3,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Copy package files and install dependencies
-COPY package*.json ./
+# Copy package files + Prisma schema/config before install (postinstall runs prisma generate)
+COPY package*.json prisma.config.ts ./
+COPY prisma ./prisma
 RUN npm ci
 
 # Copy the rest of your code
