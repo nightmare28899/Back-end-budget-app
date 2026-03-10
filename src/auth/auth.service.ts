@@ -165,8 +165,19 @@ export class AuthService {
       }
 
       const tokens = await this.generateTokens(user.id, user.email);
-      const { isActive, deletedAt, ...activeUser } = user;
-      const authUser = await this.withAvatarPresignedUrl(activeUser);
+      const authUser = await this.withAvatarPresignedUrl({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        avatarUrl: user.avatarUrl,
+        dailyBudget: user.dailyBudget,
+        budgetAmount: user.budgetAmount,
+        budgetPeriod: user.budgetPeriod,
+        budgetPeriodStart: user.budgetPeriodStart,
+        budgetPeriodEnd: user.budgetPeriodEnd,
+        currency: user.currency,
+      });
 
       return {
         message: "Session renewed successfully",

@@ -72,11 +72,7 @@ export function resolveBudgetWindow(
   const period = normalizeBudgetPeriod(config.budgetPeriod);
   const amount = Math.max(
     0,
-    Number(
-      config.budgetAmount ??
-        config.dailyBudget ??
-        0,
-    ),
+    Number(config.budgetAmount ?? config.dailyBudget ?? 0),
   );
 
   const todayStart = startOfDay(now);
@@ -141,10 +137,7 @@ function parseDate(raw?: Date | string | null): Date | null {
     return null;
   }
 
-  const date =
-    raw instanceof Date
-      ? raw
-      : createDateFromString(raw);
+  const date = raw instanceof Date ? raw : createDateFromString(raw);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 

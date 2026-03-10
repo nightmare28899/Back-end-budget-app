@@ -3,6 +3,7 @@ import { ValidationPipe } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
+import basicAuth from "express-basic-auth";
 import { AppModule } from "./app.module";
 
 const WEAK_SECRET_VALUES = new Set([
@@ -71,9 +72,9 @@ async function bootstrap() {
   const corsOrigin = process.env.CORS_ORIGIN;
   const allowedOrigins = corsOrigin
     ? corsOrigin
-      .split(",")
-      .map((origin) => origin.trim())
-      .filter((origin) => origin.length > 0)
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0)
     : [];
 
   if (isProduction && allowedOrigins.length === 0) {
@@ -88,7 +89,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const basicAuthMiddleware = require("express-basic-auth")({
+  const basicAuthMiddleware = basicAuth({
     challenge: true,
     users: {
       [process.env.SWAGGER_USERNAME || "admin"]:

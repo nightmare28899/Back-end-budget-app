@@ -150,12 +150,16 @@ export class SubscriptionsService {
       message: "Monthly subscription projection calculated successfully",
       activeCount: subscriptions.length,
       totalMonthlyCost: this.roundMoney(totalMonthlyCost),
-      currency: currencyBreakdown.length === 1 ? currencyBreakdown[0].currency : null,
+      currency:
+        currencyBreakdown.length === 1 ? currencyBreakdown[0].currency : null,
       currencyBreakdown,
     };
   }
 
-  async findUpcoming(userId: string, days = 3): Promise<UpcomingSubscriptionItem[]> {
+  async findUpcoming(
+    userId: string,
+    days = 3,
+  ): Promise<UpcomingSubscriptionItem[]> {
     const horizonDays = this.normalizeDays(days);
     const now = new Date();
     const endDate = new Date(now);
