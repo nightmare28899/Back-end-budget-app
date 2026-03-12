@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { BillingCycle } from "@prisma/client";
+import { BillingCycle, PaymentMethod } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateSubscriptionDto } from "./dto/create-subscription.dto";
 import { UpdateSubscriptionDto } from "./dto/update-subscription.dto";
@@ -40,6 +40,9 @@ export class SubscriptionsService {
         userId,
         name: dto.name,
         cost: dto.cost,
+        paymentMethod:
+          (dto.paymentMethod as PaymentMethod | undefined) ??
+          PaymentMethod.CARD,
         currency: dto.currency ?? "MXN",
         billingCycle: dto.billingCycle as BillingCycle,
         nextPaymentDate,
@@ -87,6 +90,7 @@ export class SubscriptionsService {
       data: {
         name: dto.name,
         cost: dto.cost,
+        paymentMethod: dto.paymentMethod as PaymentMethod | undefined,
         currency: dto.currency,
         billingCycle: dto.billingCycle as BillingCycle | undefined,
         nextPaymentDate,

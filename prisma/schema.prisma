@@ -13,6 +13,11 @@ enum BillingCycle {
   YEARLY
 }
 
+enum PaymentMethod {
+  CASH
+  CARD
+}
+
 model User {
   id          String     @id @default(uuid())
   email       String     @unique
@@ -54,6 +59,7 @@ model Expense {
   id         String    @id @default(uuid())
   title      String
   cost       Decimal   @db.Decimal(10, 2)
+  paymentMethod PaymentMethod @default(CASH)
   isSubscription Boolean @default(false)
   subscriptionId String?
   imageUrl   String?
@@ -78,6 +84,7 @@ model Subscription {
   id              String       @id @default(uuid())
   name            String
   cost            Decimal      @db.Decimal(10, 2)
+  paymentMethod   PaymentMethod @default(CARD)
   currency        String       @default("MXN")
   billingCycle    BillingCycle @default(MONTHLY)
   nextPaymentDate DateTime

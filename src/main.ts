@@ -90,41 +90,24 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const swaggerEnabled =
-    process.env.SWAGGER_ENABLED === "true" ||
-    (!isProduction && process.env.SWAGGER_ENABLED !== "false");
+  const basicAuthMiddleware = basicAuth({
+    challenge: true,
+    users: {
+      [process.env.SWAGGER_USERNAME || "admin"]:
+        process.env.SWAGGER_PASSWORD || "admin",
+    },
+  });
+  app.use("/api/docs", basicAuthMiddleware);
+  app.use("/api/docs-json", basicAuthMiddleware);
 
-  if (swaggerEnabled) {
-    if (isProduction) {
-      if (!process.env.SWAGGER_USERNAME || !process.env.SWAGGER_PASSWORD) {
-        throw new Error(
-          "SWAGGER_USERNAME and SWAGGER_PASSWORD are required when SWAGGER_ENABLED=true in production",
-        );
-      }
-    }
-
-    const basicAuthMiddleware = basicAuth({
-      challenge: true,
-      users: {
-        [process.env.SWAGGER_USERNAME || "admin"]:
-          process.env.SWAGGER_PASSWORD || "admin",
-      },
-    });
-    app.use("/api/docs", basicAuthMiddleware);
-    app.use("/api/docs-json", basicAuthMiddleware);
-
-    const config = new DocumentBuilder()
-      .setTitle("BudgetApp API")
-      .setDescription("Personal finance and expense tracking API")
-      .setVersion("1.0")
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
-    logger.log("Swagger is enabled");
-  } else {
-    logger.log("Swagger is disabled");
-  }
+  const config = new DocumentBuilder()
+    .setTitle("BudgetApp API")
+    .setDescription("Personal finance and expense tracking API")
+    .setVersion("1.0")
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

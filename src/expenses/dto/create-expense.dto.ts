@@ -8,10 +8,16 @@ import {
   MaxLength,
   IsUUID,
   Matches,
+  IsIn,
 } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
-import { trimStringValue } from "../../common/dto/string-transformers";
+import {
+  trimStringValue,
+  trimUpperCaseStringValue,
+} from "../../common/dto/string-transformers";
+
+export const PAYMENT_METHOD_VALUES = ["CASH", "CARD"] as const;
 
 export class CreateExpenseDto {
   @ApiProperty({ example: "Coffee at Starbucks" })
@@ -26,6 +32,17 @@ export class CreateExpenseDto {
   @Min(0.01)
   @Type(() => Number)
   cost: number;
+
+  @ApiPropertyOptional({
+    example: "CARD",
+    enum: PAYMENT_METHOD_VALUES,
+    description: "Payment method used for the expense",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
+  @IsString()
+  @IsIn([...PAYMENT_METHOD_VALUES])
+  paymentMethod?: string;
 
   @ApiPropertyOptional({ example: "Great latte" })
   @IsOptional()

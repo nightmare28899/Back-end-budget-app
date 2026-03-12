@@ -8,7 +8,7 @@ import { StorageService } from "../storage/storage.service";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
 import { QueryExpenseDto } from "./dto/query-expense.dto";
-import { Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
 import {
   formatDateOnly,
   resolveBudgetWindow,
@@ -48,6 +48,9 @@ export class ExpensesService {
       data: {
         title: dto.title,
         cost: dto.cost,
+        paymentMethod:
+          (dto.paymentMethod as PaymentMethod | undefined) ??
+          PaymentMethod.CASH,
         note: dto.note,
         date: dto.date ? new Date(dto.date) : new Date(),
         categoryId,
@@ -224,6 +227,7 @@ export class ExpensesService {
       where: { id },
       data: {
         ...dto,
+        paymentMethod: dto.paymentMethod as PaymentMethod | undefined,
         categoryId: nextCategoryId,
         date: dto.date ? new Date(dto.date) : undefined,
       },
