@@ -1,7 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 import { MulterOptions } from "@nestjs/platform-express/multer/interfaces/multer-options.interface";
 
-const DEFAULT_MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024;
+const DEFAULT_MAX_IMAGE_FILE_SIZE = 5 * 1024 * 1024;
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",

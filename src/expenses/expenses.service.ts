@@ -126,6 +126,9 @@ export class ExpensesService {
 
   async findAll(userId: string, query: QueryExpenseDto) {
     const where: Prisma.ExpenseWhereInput = { userId };
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
 
     if (query.from || query.to) {
       where.date = {};
@@ -145,15 +148,37 @@ export class ExpensesService {
       where.categoryId = query.categoryId;
     }
 
-    const expenses = await this.prisma.expense.findMany({
-      where,
-      include: { category: true },
-      orderBy: { date: "desc" },
-    });
+    const [expenses, totalCount, sumResult] = await Promise.all([
+      this.prisma.expense.findMany({
+        where,
+        include: { category: true },
+        orderBy: { date: "desc" },
+        skip,
+        take: limit,
+      }),
+      this.prisma.expense.count({ where }),
+      this.prisma.expense.aggregate({
+        where,
+        _sum: { cost: true },
+      }),
+    ]);
 
-    const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
+    const total = Number(sumResult._sum.cost ?? 0);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
 
-    return { expenses, total, count: expenses.length };
+    return {
+      expenses,
+      total,
+      count: expenses.length,
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    };
   }
 
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {

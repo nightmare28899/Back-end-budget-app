@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { ValidationPipe } from "@nestjs/common";
+import { ValidationPipe, Logger } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
@@ -39,6 +39,7 @@ function assertStrongProductionSecrets(): void {
 }
 
 async function bootstrap() {
+  const logger = new Logger("Bootstrap");
   assertStrongProductionSecrets();
 
   const app = await NestFactory.create(AppModule);
@@ -78,8 +79,8 @@ async function bootstrap() {
     : [];
 
   if (isProduction && allowedOrigins.length === 0) {
-    console.warn(
-      "CORS is disabled in production because CORS_ORIGIN is not configured.",
+    throw new Error(
+      "CORS_ORIGIN must be configured in production to prevent accidental open CORS.",
     );
   }
 
@@ -89,24 +90,41 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const basicAuthMiddleware = basicAuth({
-    challenge: true,
-    users: {
-      [process.env.SWAGGER_USERNAME || "admin"]:
-        process.env.SWAGGER_PASSWORD || "admin",
-    },
-  });
-  app.use("/api/docs", basicAuthMiddleware);
-  app.use("/api/docs-json", basicAuthMiddleware);
+  const swaggerEnabled =
+    process.env.SWAGGER_ENABLED === "true" ||
+    (!isProduction && process.env.SWAGGER_ENABLED !== "false");
 
-  const config = new DocumentBuilder()
-    .setTitle("BudgetApp API")
-    .setDescription("Personal finance and expense tracking API")
-    .setVersion("1.0")
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
+  if (swaggerEnabled) {
+    if (isProduction) {
+      if (!process.env.SWAGGER_USERNAME || !process.env.SWAGGER_PASSWORD) {
+        throw new Error(
+          "SWAGGER_USERNAME and SWAGGER_PASSWORD are required when SWAGGER_ENABLED=true in production",
+        );
+      }
+    }
+
+    const basicAuthMiddleware = basicAuth({
+      challenge: true,
+      users: {
+        [process.env.SWAGGER_USERNAME || "admin"]:
+          process.env.SWAGGER_PASSWORD || "admin",
+      },
+    });
+    app.use("/api/docs", basicAuthMiddleware);
+    app.use("/api/docs-json", basicAuthMiddleware);
+
+    const config = new DocumentBuilder()
+      .setTitle("BudgetApp API")
+      .setDescription("Personal finance and expense tracking API")
+      .setVersion("1.0")
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
+    logger.log("Swagger is enabled");
+  } else {
+    logger.log("Swagger is disabled");
+  }
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
