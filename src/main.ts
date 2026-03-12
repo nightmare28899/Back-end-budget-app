@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { ValidationPipe } from "@nestjs/common";
+import { ValidationPipe, Logger } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
@@ -39,6 +39,7 @@ function assertStrongProductionSecrets(): void {
 }
 
 async function bootstrap() {
+  const logger = new Logger("Bootstrap");
   assertStrongProductionSecrets();
 
   const app = await NestFactory.create(AppModule);
@@ -78,8 +79,8 @@ async function bootstrap() {
     : [];
 
   if (isProduction && allowedOrigins.length === 0) {
-    console.warn(
-      "CORS is disabled in production because CORS_ORIGIN is not configured.",
+    throw new Error(
+      "CORS_ORIGIN must be configured in production to prevent accidental open CORS.",
     );
   }
 

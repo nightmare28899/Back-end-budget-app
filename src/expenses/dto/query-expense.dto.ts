@@ -1,10 +1,13 @@
-import { Transform } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsOptional,
   IsString,
   IsDateString,
   IsUUID,
   MaxLength,
+  IsInt,
+  Min,
+  Max,
 } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { trimStringValue } from "../../common/dto/string-transformers";
@@ -31,4 +34,19 @@ export class QueryExpenseDto {
   @IsOptional()
   @IsUUID()
   categoryId?: string;
+
+  @ApiPropertyOptional({ example: 1, default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 20, default: 20, minimum: 1, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
 }
