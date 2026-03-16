@@ -13,6 +13,7 @@ import { AnalyticsModule } from "./analytics/analytics.module";
 import { ReportsModule } from "./reports/reports.module";
 import { SubscriptionsModule } from "./subscriptions/subscriptions.module";
 import { HistoryModule } from "./history/history.module";
+import { SavingsModule } from "./savings/savings.module";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { HistoryModule } from "./history/history.module";
     ReportsModule,
     SubscriptionsModule,
     HistoryModule,
+    SavingsModule,
   ],
   providers: [
     {
