@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { ValidationPipe, Logger } from "@nestjs/common";
+import { ValidationPipe } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
@@ -39,7 +39,6 @@ function assertStrongProductionSecrets(): void {
 }
 
 async function bootstrap() {
-  const logger = new Logger("Bootstrap");
   assertStrongProductionSecrets();
 
   const app = await NestFactory.create(AppModule);
