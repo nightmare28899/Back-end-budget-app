@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -102,6 +103,119 @@ export class SavingsService {
       throw new InternalServerErrorException(
         "Could not fetch savings transactions",
       );
+    }
+  }
+
+  async withdrawFunds(userId: string, goalId: string, amount: number) {
+    try {
+      const goal = await this.prisma.savingsGoal.findFirst({
+        where: { id: goalId, userId },
+        select: { id: true, currentAmount: true },
+      });
+
+      if (!goal) {
+        throw new NotFoundException("Savings goal not found");
+      }
+
+      const decimalAmount = this.toDecimal(amount);
+      const currentAmount = new Prisma.Decimal(goal.currentAmount);
+
+      if (currentAmount.lessThan(decimalAmount)) {
+        throw new BadRequestException(
+          "Insufficient savings balance for this withdrawal",
+        );
+      }
+
+      return await this.prisma.$transaction(async (tx) => {
+        const withdrawal = await tx.savingsTransaction.create({
+          data: {
+            amount: decimalAmount,
+            type: SavingsTransactionType.WITHDRAW,
+            goalId,
+          },
+        });
+
+        const updatedGoal = await tx.savingsGoal.update({
+          where: { id: goalId },
+          data: {
+            currentAmount: {
+              decrement: decimalAmount,
+            },
+          },
+        });
+
+        return { withdrawal, goal: updatedGoal };
+      });
+    } catch (error) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      throw new InternalServerErrorException("Could not process withdrawal");
+    }
+  }
+
+  async updateGoal(
+    userId: string,
+    goalId: string,
+    data: { title?: string; targetAmount?: number },
+  ) {
+    const goal = await this.prisma.savingsGoal.findFirst({
+      where: { id: goalId, userId },
+      select: { id: true, currentAmount: true },
+    });
+
+    if (!goal) {
+      throw new NotFoundException("Savings goal not found");
+    }
+
+    if (
+      data.targetAmount !== undefined &&
+      new Prisma.Decimal(data.targetAmount).lessThan(goal.currentAmount)
+    ) {
+      throw new BadRequestException(
+        "Target amount cannot be lower than current saved amount",
+      );
+    }
+
+    try {
+      return await this.prisma.savingsGoal.update({
+        where: { id: goalId },
+        data: {
+          ...(data.title !== undefined ? { title: data.title } : {}),
+          ...(data.targetAmount !== undefined
+            ? { targetAmount: this.toDecimal(data.targetAmount) }
+            : {}),
+        },
+      });
+    } catch {
+      throw new InternalServerErrorException("Could not update savings goal");
+    }
+  }
+
+  async deleteGoal(userId: string, goalId: string) {
+    const goal = await this.prisma.savingsGoal.findFirst({
+      where: { id: goalId, userId },
+      select: { id: true, currentAmount: true },
+    });
+
+    if (!goal) {
+      throw new NotFoundException("Savings goal not found");
+    }
+
+    if (!new Prisma.Decimal(goal.currentAmount).equals(0)) {
+      throw new BadRequestException(
+        "Savings goal can only be deleted when current amount is 0",
+      );
+    }
+
+    try {
+      await this.prisma.savingsGoal.delete({ where: { id: goalId } });
+      return { success: true };
+    } catch {
+      throw new InternalServerErrorException("Could not delete savings goal");
     }
   }
 
