@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   UseGuards,
 } from "@nestjs/common";
@@ -13,6 +15,8 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import { AddSavingsFundsDto } from "./dto/add-savings-funds.dto";
 import { CreateSavingsGoalDto } from "./dto/create-savings-goal.dto";
+import { UpdateSavingsGoalDto } from "./dto/update-savings-goal.dto";
+import { WithdrawSavingsFundsDto } from "./dto/withdraw-savings-funds.dto";
 import { SavingsService } from "./savings.service";
 
 @ApiTags("Savings")
@@ -54,5 +58,34 @@ export class SavingsController {
     @Param("goalId", ParseUUIDPipe) goalId: string,
   ) {
     return this.savingsService.getGoalTransactions(user.id, goalId);
+  }
+
+  @Post("goals/:goalId/withdraw")
+  @ApiOperation({ summary: "Withdraw funds from an existing savings goal" })
+  async withdrawFunds(
+    @CurrentUser() user: CurrentUserType,
+    @Param("goalId", ParseUUIDPipe) goalId: string,
+    @Body() dto: WithdrawSavingsFundsDto,
+  ) {
+    return this.savingsService.withdrawFunds(user.id, goalId, dto.amount);
+  }
+
+  @Patch("goals/:goalId")
+  @ApiOperation({ summary: "Update an existing savings goal" })
+  async updateGoal(
+    @CurrentUser() user: CurrentUserType,
+    @Param("goalId", ParseUUIDPipe) goalId: string,
+    @Body() dto: UpdateSavingsGoalDto,
+  ) {
+    return this.savingsService.updateGoal(user.id, goalId, dto);
+  }
+
+  @Delete("goals/:goalId")
+  @ApiOperation({ summary: "Delete a savings goal when current amount is 0" })
+  async deleteGoal(
+    @CurrentUser() user: CurrentUserType,
+    @Param("goalId", ParseUUIDPipe) goalId: string,
+  ) {
+    return this.savingsService.deleteGoal(user.id, goalId);
   }
 }
