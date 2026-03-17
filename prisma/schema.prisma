@@ -114,6 +114,9 @@ model SavingsGoal {
   title         String
   targetAmount  Decimal              @db.Decimal(10, 2)
   currentAmount Decimal              @default(0) @db.Decimal(10, 2)
+  targetDate    DateTime?
+  icon          String?
+  color         String?
   userId        String
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt

@@ -28,14 +28,26 @@ export class SavingsService {
     }
   }
 
-  async createGoal(userId: string, title: string, targetAmount: number) {
+  async createGoal(
+    userId: string,
+    data: {
+      title: string;
+      targetAmount: number;
+      targetDate?: string;
+      icon?: string;
+      color?: string;
+    },
+  ) {
     try {
       return await this.prisma.savingsGoal.create({
         data: {
           userId,
-          title,
-          targetAmount: this.toDecimal(targetAmount),
+          title: data.title,
+          targetAmount: this.toDecimal(data.targetAmount),
           currentAmount: this.toDecimal(0),
+          ...(data.targetDate ? { targetDate: new Date(data.targetDate) } : {}),
+          ...(data.icon !== undefined ? { icon: data.icon } : {}),
+          ...(data.color !== undefined ? { color: data.color } : {}),
         },
       });
     } catch {
@@ -160,7 +172,13 @@ export class SavingsService {
   async updateGoal(
     userId: string,
     goalId: string,
-    data: { title?: string; targetAmount?: number },
+    data: {
+      title?: string;
+      targetAmount?: number;
+      targetDate?: string;
+      icon?: string;
+      color?: string;
+    },
   ) {
     const goal = await this.prisma.savingsGoal.findFirst({
       where: { id: goalId, userId },
@@ -188,6 +206,11 @@ export class SavingsService {
           ...(data.targetAmount !== undefined
             ? { targetAmount: this.toDecimal(data.targetAmount) }
             : {}),
+          ...(data.targetDate !== undefined
+            ? { targetDate: data.targetDate ? new Date(data.targetDate) : null }
+            : {}),
+          ...(data.icon !== undefined ? { icon: data.icon || null } : {}),
+          ...(data.color !== undefined ? { color: data.color || null } : {}),
         },
       });
     } catch {

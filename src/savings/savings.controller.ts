@@ -38,7 +38,7 @@ export class SavingsController {
     @CurrentUser() user: CurrentUserType,
     @Body() dto: CreateSavingsGoalDto,
   ) {
-    return this.savingsService.createGoal(user.id, dto.title, dto.targetAmount);
+    return this.savingsService.createGoal(user.id, dto);
   }
 
   @Post("goals/:goalId/funds")
