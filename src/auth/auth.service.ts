@@ -99,8 +99,16 @@ export class AuthService {
       throw new UnauthorizedException("Invalid credentials");
     }
 
-    if (!user.isActive || user.deletedAt) {
+    if (!user.isActive) {
       throw new UnauthorizedException("Account is disabled");
+    }
+
+    if (user.deletedAt) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { deletedAt: null },
+      });
+      user.deletedAt = null;
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.password);
@@ -160,8 +168,16 @@ export class AuthService {
         throw new UnauthorizedException("User not found");
       }
 
-      if (!user.isActive || user.deletedAt) {
+      if (!user.isActive) {
         throw new UnauthorizedException("Account is disabled");
+      }
+
+      if (user.deletedAt) {
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { deletedAt: null },
+        });
+        user.deletedAt = null;
       }
 
       const tokens = await this.generateTokens(user.id, user.email);
