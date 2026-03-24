@@ -230,6 +230,7 @@ export class UsersService {
       data: {
         name: dto.name,
         currency: dto.currency,
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
         ...budgetData,
         avatarUrl: nextAvatarKey ?? undefined,
       },

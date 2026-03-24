@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsIn,
   IsOptional,
@@ -79,4 +80,18 @@ export class UpdateUserDto {
   @IsString()
   @Matches(/^[A-Z]{3}$/)
   currency?: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase().trim();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return undefined;
+  })
+  @IsBoolean()
+  isActive?: boolean;
 }
