@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -22,6 +21,7 @@ import {
   buildInstallmentSchedule,
   InstallmentFrequencyValue,
 } from "./installments/expense-installments.util";
+import { EntitlementsService } from "../common/entitlements/entitlements.service";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
   include: {
@@ -44,6 +44,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
     private readonly creditCardsService: CreditCardsService,
+    private readonly entitlementsService: EntitlementsService,
   ) {}
 
   async create(
@@ -70,7 +71,7 @@ export class ExpensesService {
 
     const installmentPlan = this.buildInstallmentPlan(dto);
     if (installmentPlan) {
-      await this.assertPremiumEntitlement(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
       return this.createInstallmentExpenses({
         userId,
         dto,
@@ -297,7 +298,7 @@ export class ExpensesService {
     const shouldUseInstallmentPlan =
       dto.isInstallment ?? existing.isInstallment;
     if (shouldUseInstallmentPlan) {
-      await this.assertPremiumEntitlement(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
       const installmentPlan = this.buildInstallmentPlan(dto, {
         totalAmount:
           dto.cost ?? Number(existing.installmentTotalAmount ?? existing.cost),
@@ -436,7 +437,7 @@ export class ExpensesService {
 
     const includesInstallments = expenses.some((dto) => dto.isInstallment);
     if (includesInstallments) {
-      await this.assertPremiumEntitlement(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
     }
 
     const results = [];
@@ -804,21 +805,6 @@ export class ExpensesService {
     });
 
     return user?.currency ?? DEFAULT_EXPENSE_CURRENCY;
-  }
-
-  private async assertPremiumEntitlement(userId: string, feature: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { isPremium: true },
-    });
-
-    if (!user?.isPremium) {
-      throw new ForbiddenException({
-        code: "PREMIUM_REQUIRED",
-        message: "Premium subscription required",
-        feature,
-      });
-    }
   }
 
   private buildCurrencyBreakdownFromExpenses(

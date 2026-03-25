@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -11,13 +10,17 @@ import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
 import { QueryCreditCardsDto } from "./dto/query-credit-cards.dto";
 import { creditCardPublicSelect } from "./credit-card.select";
 import { isCreditCardPaymentMethod } from "../common/payments/payment-method.utils";
+import { EntitlementsService } from "../common/entitlements/entitlements.service";
 
 @Injectable()
 export class CreditCardsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly entitlementsService: EntitlementsService,
+  ) {}
 
   async create(userId: string, dto: CreateCreditCardDto) {
-    await this.assertPremiumEntitlement(userId, "credit_cards_catalog");
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
     return this.prisma.creditCard.create({
       data: {
         userId,
@@ -36,7 +39,7 @@ export class CreditCardsService {
   }
 
   async findAll(userId: string, query?: QueryCreditCardsDto) {
-    await this.assertPremiumEntitlement(userId, "credit_cards_catalog");
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
 
     return this.prisma.creditCard.findMany({
       where: {
@@ -49,7 +52,7 @@ export class CreditCardsService {
   }
 
   async findOne(id: string, userId: string, includeInactive = true) {
-    await this.assertPremiumEntitlement(userId, "credit_cards_catalog");
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
 
     const card = await this.prisma.creditCard.findFirst({
       where: {
@@ -107,7 +110,7 @@ export class CreditCardsService {
       return null;
     }
 
-    await this.assertPremiumEntitlement(params.userId, "credit_cards_catalog");
+    await this.entitlementsService.assertPremium(params.userId, "credit_cards_catalog");
 
     const cardId = params.creditCardId ?? params.existingCreditCardId ?? null;
 
@@ -122,21 +125,6 @@ export class CreditCardsService {
     });
 
     return cardId;
-  }
-
-  private async assertPremiumEntitlement(userId: string, feature: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { isPremium: true },
-    });
-
-    if (!user?.isPremium) {
-      throw new ForbiddenException({
-        code: "PREMIUM_REQUIRED",
-        message: "Premium subscription required",
-        feature,
-      });
-    }
   }
 
   private async assertAssignableCard(
