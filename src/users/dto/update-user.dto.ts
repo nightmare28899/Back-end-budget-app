@@ -8,6 +8,7 @@ import {
   Min,
   Matches,
   MaxLength,
+  MinLength,
 } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
@@ -94,4 +95,15 @@ export class UpdateUserDto {
   })
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    example: "tempPass123",
+    minLength: 6,
+    description: "Temporary password set by admin",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimStringValue(value as unknown))
+  @IsString()
+  @MinLength(6)
+  password?: string;
 }
