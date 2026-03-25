@@ -115,6 +115,7 @@ export class UsersController {
         budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         isActive: { type: "boolean" },
+        isPremium: { type: "boolean" },
         password: { type: "string", minLength: 6 },
         avatar: { type: "string", format: "binary" },
       },
@@ -128,6 +129,7 @@ export class UsersController {
   ) {
     const updatedUser = await this.usersService.updateProfile(
       user.id,
+      user,
       dto,
       avatar,
     );
@@ -157,6 +159,7 @@ export class UsersController {
         budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         isActive: { type: "boolean" },
+        isPremium: { type: "boolean" },
         password: { type: "string", minLength: 6 },
         avatar: { type: "string", format: "binary" },
       },

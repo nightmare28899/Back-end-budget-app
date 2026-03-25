@@ -45,6 +45,7 @@ export class AuthService {
         role: dto.role ?? "user",
         avatarUrl,
         isActive: true,
+        isPremium: false,
         deletedAt: null,
       },
       select: {
@@ -60,6 +61,7 @@ export class AuthService {
         budgetPeriodEnd: true,
         currency: true,
         isActive: true,
+        isPremium: true,
         deletedAt: true,
       },
     });
@@ -91,6 +93,7 @@ export class AuthService {
         budgetPeriodEnd: true,
         currency: true,
         isActive: true,
+        isPremium: true,
         deletedAt: true,
       },
     });
@@ -130,6 +133,7 @@ export class AuthService {
       budgetPeriodStart: user.budgetPeriodStart,
       budgetPeriodEnd: user.budgetPeriodEnd,
       currency: user.currency,
+      isPremium: user.isPremium,
     });
 
     return {
@@ -160,6 +164,7 @@ export class AuthService {
           budgetPeriodEnd: true,
           currency: true,
           isActive: true,
+          isPremium: true,
           deletedAt: true,
         },
       });
@@ -193,6 +198,7 @@ export class AuthService {
         budgetPeriodStart: user.budgetPeriodStart,
         budgetPeriodEnd: user.budgetPeriodEnd,
         currency: user.currency,
+        isPremium: user.isPremium,
       });
 
       return {

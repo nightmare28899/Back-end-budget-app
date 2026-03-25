@@ -42,6 +42,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         budgetPeriodEnd: true,
         currency: true,
         isActive: true,
+        isPremium: true,
         deletedAt: true,
       },
     });
@@ -60,6 +61,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       name: user.name,
       role: user.role,
       currency: user.currency,
+      isPremium: user.isPremium,
       budgetPeriod: user.budgetPeriod,
       dailyBudget: Number(user.dailyBudget),
       budgetAmount: Number(user.budgetAmount),
