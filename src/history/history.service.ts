@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
 
 @Injectable()
 export class HistoryService {
@@ -25,11 +26,17 @@ export class HistoryService {
       }),
       this.prisma.expense.findMany({
         where: { userId },
-        include: { category: true },
+        include: {
+          category: true,
+          creditCard: { select: creditCardPublicSelect },
+        },
         orderBy: { date: "desc" },
       }),
       this.prisma.subscription.findMany({
         where: { userId },
+        include: {
+          creditCard: { select: creditCardPublicSelect },
+        },
         orderBy: { nextPaymentDate: "asc" },
       }),
     ]);
@@ -42,6 +49,13 @@ export class HistoryService {
       (sum, expense) => sum + Number(expense.cost),
       0,
     );
+    const expenseCurrencyTotals = new Map<string, number>();
+    for (const expense of expenses) {
+      expenseCurrencyTotals.set(
+        expense.currency,
+        (expenseCurrencyTotals.get(expense.currency) ?? 0) + Number(expense.cost),
+      );
+    }
 
     const activeSubscriptions = subscriptions.filter(
       (subscription) => subscription.isActive,
@@ -65,6 +79,12 @@ export class HistoryService {
         expenseCount: expenses.length,
         totalExpenses: this.roundMoney(totalExpenses),
         expenseCurrency: user.currency,
+        expenseTotalsByCurrency: Array.from(expenseCurrencyTotals.entries()).map(
+          ([currency, total]) => ({
+            currency,
+            total: this.roundMoney(total),
+          }),
+        ),
         subscriptionCount: subscriptions.length,
         activeSubscriptionCount: activeSubscriptions.length,
         totalActiveSubscriptions: this.roundMoney(totalActiveSubscriptions),

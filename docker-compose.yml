@@ -8,6 +8,7 @@ services:
         depends_on:
             - minio
         environment:
+            DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@host.docker.internal:5432/budgetapp?schema=public}
             MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
             MINIO_PORT: ${MINIO_PORT:-9000}
             MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}

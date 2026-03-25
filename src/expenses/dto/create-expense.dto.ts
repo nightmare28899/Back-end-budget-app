@@ -16,8 +16,7 @@ import {
   trimStringValue,
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
-
-export const PAYMENT_METHOD_VALUES = ["CASH", "CARD"] as const;
+import { PAYMENT_METHOD_VALUES } from "../../common/payments/payment-method.utils";
 
 export class CreateExpenseDto {
   @ApiProperty({ example: "Coffee at Starbucks" })
@@ -33,8 +32,15 @@ export class CreateExpenseDto {
   @Type(() => Number)
   cost: number;
 
+  @ApiPropertyOptional({ example: "MXN", default: "MXN" })
+  @IsOptional()
+  @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
+  @IsString()
+  @Matches(/^[A-Z]{3}$/)
+  currency?: string;
+
   @ApiPropertyOptional({
-    example: "CARD",
+    example: "CREDIT_CARD",
     enum: PAYMENT_METHOD_VALUES,
     description: "Payment method used for the expense",
   })
@@ -43,6 +49,15 @@ export class CreateExpenseDto {
   @IsString()
   @IsIn([...PAYMENT_METHOD_VALUES])
   paymentMethod?: string;
+
+  @ApiPropertyOptional({
+    example: "8f4d2ea1-3d68-4b94-98ee-5a5abf71dc5c",
+    description:
+      "Required when paymentMethod is CREDIT_CARD. Ignored otherwise.",
+  })
+  @IsOptional()
+  @IsUUID()
+  creditCardId?: string;
 
   @ApiPropertyOptional({ example: "Great latte" })
   @IsOptional()

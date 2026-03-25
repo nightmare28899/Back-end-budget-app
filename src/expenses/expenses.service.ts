@@ -13,9 +13,15 @@ import {
   formatDateOnly,
   resolveBudgetWindow,
 } from "../common/budget/budget.utils";
+import { CreditCardsService } from "../credit-cards/credit-cards.service";
+import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
+import { normalizePaymentMethod } from "../common/payments/payment-method.utils";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
-  include: { category: true };
+  include: {
+    category: true;
+    creditCard: { select: typeof creditCardPublicSelect };
+  };
 }>;
 
 type ExpenseWithPresignedUrl = ExpenseWithCategory & {
@@ -23,12 +29,14 @@ type ExpenseWithPresignedUrl = ExpenseWithCategory & {
 };
 
 const MAX_SYNC_BATCH_SIZE = 200;
+const DEFAULT_EXPENSE_CURRENCY = "MXN";
 
 @Injectable()
 export class ExpensesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    private readonly creditCardsService: CreditCardsService,
   ) {}
 
   async create(
@@ -43,21 +51,34 @@ export class ExpensesService {
     }
 
     const categoryId = await this.resolveCategoryId(userId, dto);
+    const currency = dto.currency ?? (await this.getUserCurrency(userId));
+    const paymentMethod =
+      normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH;
+    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
+      {
+        userId,
+        paymentMethod,
+        creditCardId: dto.creditCardId,
+      },
+    );
 
     return this.prisma.expense.create({
       data: {
         title: dto.title,
         cost: dto.cost,
-        paymentMethod:
-          (dto.paymentMethod as PaymentMethod | undefined) ??
-          PaymentMethod.CASH,
+        currency,
+        paymentMethod,
+        creditCardId,
         note: dto.note,
         date: dto.date ? new Date(dto.date) : new Date(),
         categoryId,
         imageUrl,
         userId,
       },
-      include: { category: true },
+      include: {
+        category: true,
+        creditCard: { select: creditCardPublicSelect },
+      },
     });
   }
 
@@ -73,11 +94,15 @@ export class ExpensesService {
         userId,
         date: { gte: startOfDay, lte: endOfDay },
       },
-      include: { category: true },
+      include: {
+        category: true,
+        creditCard: { select: creditCardPublicSelect },
+      },
       orderBy: { date: "desc" },
     });
 
     const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
+    const currencyBreakdown = this.buildCurrencyBreakdownFromExpenses(expenses);
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -116,6 +141,9 @@ export class ExpensesService {
     return {
       expenses,
       total,
+      currency:
+        currencyBreakdown.length === 1 ? currencyBreakdown[0].currency : null,
+      currencyBreakdown,
       dailyBudget: budgetWindow.amount,
       budgetAmount: budgetWindow.amount,
       budgetPeriod: budgetWindow.period,
@@ -151,10 +179,13 @@ export class ExpensesService {
       where.categoryId = query.categoryId;
     }
 
-    const [expenses, totalCount, sumResult] = await Promise.all([
+    const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all([
       this.prisma.expense.findMany({
         where,
-        include: { category: true },
+        include: {
+          category: true,
+          creditCard: { select: creditCardPublicSelect },
+        },
         orderBy: { date: "desc" },
         skip,
         take: limit,
@@ -164,14 +195,24 @@ export class ExpensesService {
         where,
         _sum: { cost: true },
       }),
+      this.prisma.expense.groupBy({
+        by: ["currency"],
+        where,
+        _sum: { cost: true },
+      }),
     ]);
 
     const total = Number(sumResult._sum.cost ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const currencyBreakdown = currencyGroups.map((item) => ({
+      currency: item.currency,
+      total: this.roundMoney(Number(item._sum.cost ?? 0)),
+    }));
 
     return {
       expenses,
       total,
+      currencyBreakdown,
       count: expenses.length,
       pagination: {
         page,
@@ -187,7 +228,10 @@ export class ExpensesService {
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {
     const expense = await this.prisma.expense.findFirst({
       where: { id, userId },
-      include: { category: true },
+      include: {
+        category: true,
+        creditCard: { select: creditCardPublicSelect },
+      },
     });
 
     if (!expense) throw new NotFoundException("Expense not found");
@@ -207,7 +251,7 @@ export class ExpensesService {
   }
 
   async update(id: string, userId: string, dto: UpdateExpenseDto) {
-    await this.findOne(id, userId);
+    const existing = await this.findOne(id, userId);
 
     let nextCategoryId = dto.categoryId;
     if (dto.categoryId) {
@@ -223,15 +267,33 @@ export class ExpensesService {
       nextCategoryId = category.id;
     }
 
+    const nextPaymentMethod =
+      dto.paymentMethod !== undefined
+        ? normalizePaymentMethod(dto.paymentMethod)
+        : existing.paymentMethod;
+    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
+      {
+        userId,
+        paymentMethod: nextPaymentMethod,
+        creditCardId: dto.creditCardId,
+        existingCreditCardId: existing.creditCardId ?? null,
+      },
+    );
+
     return this.prisma.expense.update({
       where: { id },
       data: {
         ...dto,
-        paymentMethod: dto.paymentMethod as PaymentMethod | undefined,
+        currency: dto.currency,
+        paymentMethod: nextPaymentMethod,
+        creditCardId,
         categoryId: nextCategoryId,
         date: dto.date ? new Date(dto.date) : undefined,
       },
-      include: { category: true },
+      include: {
+        category: true,
+        creditCard: { select: creditCardPublicSelect },
+      },
     });
   }
 
@@ -319,5 +381,36 @@ export class ExpensesService {
     throw new BadRequestException(
       "A category is required. Send categoryId or categoryName.",
     );
+  }
+
+  private async getUserCurrency(userId: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { currency: true },
+    });
+
+    return user?.currency ?? DEFAULT_EXPENSE_CURRENCY;
+  }
+
+  private buildCurrencyBreakdownFromExpenses(
+    expenses: Array<{ cost: Prisma.Decimal; currency: string }>,
+  ) {
+    const totals = new Map<string, number>();
+
+    for (const expense of expenses) {
+      totals.set(
+        expense.currency,
+        (totals.get(expense.currency) ?? 0) + Number(expense.cost),
+      );
+    }
+
+    return Array.from(totals.entries()).map(([currency, total]) => ({
+      currency,
+      total: this.roundMoney(total),
+    }));
+  }
+
+  private roundMoney(value: number) {
+    return Math.round(value * 100) / 100;
   }
 }

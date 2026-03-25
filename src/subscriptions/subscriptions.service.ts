@@ -3,10 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { BillingCycle, PaymentMethod } from "@prisma/client";
+import { BillingCycle, PaymentMethod, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateSubscriptionDto } from "./dto/create-subscription.dto";
 import { UpdateSubscriptionDto } from "./dto/update-subscription.dto";
+import { CreditCardsService } from "../credit-cards/credit-cards.service";
+import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
+import { normalizePaymentMethod } from "../common/payments/payment-method.utils";
 
 export interface ProjectionCurrencyItem {
   currency: string;
@@ -22,27 +25,58 @@ export interface MonthlyProjectionResult {
 }
 
 export interface UpcomingSubscriptionItem {
+  id?: string;
+  subscriptionId?: string;
   name: string;
   amount: number;
+  currency: string;
   daysRemaining: number;
+  chargeDate: string;
+  nextPaymentDate: string;
+  paymentMethod?: PaymentMethod;
+  creditCard?: {
+    id: string;
+    name: string;
+    bank: string;
+    brand: string;
+    last4: string;
+    color: string | null;
+    creditLimit: Prisma.Decimal | null;
+    closingDay: number | null;
+    paymentDueDay: number | null;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  } | null;
 }
 
 @Injectable()
 export class SubscriptionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditCardsService: CreditCardsService,
+  ) {}
 
   async create(userId: string, dto: CreateSubscriptionDto) {
     const nextPaymentDate = this.parseDate(dto.nextPaymentDate);
     this.assertFutureDate(nextPaymentDate);
+    const paymentMethod =
+      normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CREDIT_CARD;
+    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
+      {
+        userId,
+        paymentMethod,
+        creditCardId: dto.creditCardId,
+      },
+    );
 
     return this.prisma.subscription.create({
       data: {
         userId,
         name: dto.name,
         cost: dto.cost,
-        paymentMethod:
-          (dto.paymentMethod as PaymentMethod | undefined) ??
-          PaymentMethod.CARD,
+        paymentMethod,
+        creditCardId,
         currency: dto.currency ?? "MXN",
         billingCycle: dto.billingCycle as BillingCycle,
         nextPaymentDate,
@@ -51,12 +85,18 @@ export class SubscriptionsService {
         logoUrl: dto.logoUrl,
         hexColor: dto.hexColor,
       },
+      include: {
+        creditCard: { select: creditCardPublicSelect },
+      },
     });
   }
 
   async findAll(userId: string) {
     return this.prisma.subscription.findMany({
       where: { userId },
+      include: {
+        creditCard: { select: creditCardPublicSelect },
+      },
       orderBy: { nextPaymentDate: "asc" },
     });
   }
@@ -64,6 +104,9 @@ export class SubscriptionsService {
   async findOne(id: string, userId: string) {
     const subscription = await this.prisma.subscription.findFirst({
       where: { id, userId },
+      include: {
+        creditCard: { select: creditCardPublicSelect },
+      },
     });
 
     if (!subscription) {
@@ -74,7 +117,7 @@ export class SubscriptionsService {
   }
 
   async update(id: string, userId: string, dto: UpdateSubscriptionDto) {
-    await this.findOne(id, userId);
+    const existing = await this.findOne(id, userId);
 
     const nextPaymentDate =
       dto.nextPaymentDate !== undefined
@@ -85,12 +128,26 @@ export class SubscriptionsService {
       this.assertFutureDate(nextPaymentDate);
     }
 
+    const nextPaymentMethod =
+      dto.paymentMethod !== undefined
+        ? normalizePaymentMethod(dto.paymentMethod)
+        : existing.paymentMethod;
+    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
+      {
+        userId,
+        paymentMethod: nextPaymentMethod,
+        creditCardId: dto.creditCardId,
+        existingCreditCardId: existing.creditCardId ?? null,
+      },
+    );
+
     return this.prisma.subscription.update({
       where: { id },
       data: {
         name: dto.name,
         cost: dto.cost,
-        paymentMethod: dto.paymentMethod as PaymentMethod | undefined,
+        paymentMethod: nextPaymentMethod,
+        creditCardId,
         currency: dto.currency,
         billingCycle: dto.billingCycle as BillingCycle | undefined,
         nextPaymentDate,
@@ -98,6 +155,9 @@ export class SubscriptionsService {
         isActive: dto.isActive,
         logoUrl: dto.logoUrl,
         hexColor: dto.hexColor,
+      },
+      include: {
+        creditCard: { select: creditCardPublicSelect },
       },
     });
   }
@@ -179,17 +239,30 @@ export class SubscriptionsService {
         },
       },
       select: {
+        id: true,
         name: true,
         cost: true,
+        currency: true,
+        paymentMethod: true,
+        creditCard: {
+          select: creditCardPublicSelect,
+        },
         nextPaymentDate: true,
       },
       orderBy: { nextPaymentDate: "asc" },
     });
 
     return subscriptions.map((subscription) => ({
+      id: subscription.id,
+      subscriptionId: subscription.id,
       name: subscription.name,
       amount: this.roundMoney(Number(subscription.cost)),
+      currency: subscription.currency,
       daysRemaining: this.getDaysRemaining(now, subscription.nextPaymentDate),
+      chargeDate: subscription.nextPaymentDate.toISOString(),
+      nextPaymentDate: subscription.nextPaymentDate.toISOString(),
+      paymentMethod: subscription.paymentMethod,
+      creditCard: subscription.creditCard,
     }));
   }
 

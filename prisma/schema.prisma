@@ -15,7 +15,9 @@ enum BillingCycle {
 
 enum PaymentMethod {
   CASH
-  CARD
+  CREDIT_CARD
+  DEBIT_CARD
+  TRANSFER
 }
 
 enum SavingsTransactionType {
@@ -41,11 +43,34 @@ model User {
   isActive    Boolean    @default(true)
   deletedAt   DateTime?  @map("deleted_at")
   categories    Category[]
+  creditCards   CreditCard[]
   expenses      Expense[]
   subscriptions Subscription[]
   savingsGoals  SavingsGoal[]
 
   @@map("users")
+}
+
+model CreditCard {
+  id            String         @id @default(uuid())
+  name          String
+  bank          String
+  brand         String
+  last4         String
+  color         String?
+  creditLimit   Decimal?       @db.Decimal(10, 2)
+  closingDay    Int?
+  paymentDueDay Int?
+  isActive      Boolean        @default(true)
+  userId        String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  expenses      Expense[]
+  subscriptions Subscription[]
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive, name])
+  @@map("credit_cards")
 }
 
 model Category {
@@ -65,7 +90,9 @@ model Expense {
   id         String    @id @default(uuid())
   title      String
   cost       Decimal   @db.Decimal(10, 2)
+  currency   String    @default("MXN")
   paymentMethod PaymentMethod @default(CASH)
+  creditCardId String?
   isSubscription Boolean @default(false)
   subscriptionId String?
   imageUrl   String?
@@ -76,12 +103,14 @@ model Expense {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   category   Category? @relation(fields: [categoryId], references: [id])
+  creditCard CreditCard? @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
   @@index([userId, categoryId])
   @@index([userId, isSubscription, date])
+  @@index([creditCardId])
   @@index([subscriptionId])
   @@map("expenses")
 }
@@ -90,7 +119,8 @@ model Subscription {
   id              String       @id @default(uuid())
   name            String
   cost            Decimal      @db.Decimal(10, 2)
-  paymentMethod   PaymentMethod @default(CARD)
+  paymentMethod   PaymentMethod @default(CREDIT_CARD)
+  creditCardId    String?
   currency        String       @default("MXN")
   billingCycle    BillingCycle @default(MONTHLY)
   nextPaymentDate DateTime
@@ -101,11 +131,13 @@ model Subscription {
   userId          String
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
+  creditCard      CreditCard?  @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   expenses        Expense[]
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, nextPaymentDate])
   @@index([userId, isActive])
+  @@index([creditCardId])
   @@map("subscriptions")
 }
 

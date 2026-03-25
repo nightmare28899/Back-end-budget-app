@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -18,6 +19,7 @@ import {
   trimStringValue,
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
+import { PAYMENT_METHOD_VALUES } from "../../common/payments/payment-method.utils";
 
 export const BILLING_CYCLE_VALUES = [
   "DAILY",
@@ -25,8 +27,6 @@ export const BILLING_CYCLE_VALUES = [
   "MONTHLY",
   "YEARLY",
 ] as const;
-
-export const PAYMENT_METHOD_VALUES = ["CASH", "CARD"] as const;
 
 export class CreateSubscriptionDto {
   @ApiProperty({ example: "Netflix" })
@@ -42,15 +42,24 @@ export class CreateSubscriptionDto {
   cost: number;
 
   @ApiPropertyOptional({
-    example: "CARD",
+    example: "CREDIT_CARD",
     enum: PAYMENT_METHOD_VALUES,
-    default: "CARD",
+    default: "CREDIT_CARD",
   })
   @IsOptional()
   @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
   @IsString()
   @IsIn([...PAYMENT_METHOD_VALUES])
   paymentMethod?: string;
+
+  @ApiPropertyOptional({
+    example: "8f4d2ea1-3d68-4b94-98ee-5a5abf71dc5c",
+    description:
+      "Required when paymentMethod is CREDIT_CARD. Ignored otherwise.",
+  })
+  @IsOptional()
+  @IsUUID()
+  creditCardId?: string;
 
   @ApiPropertyOptional({ example: "MXN", default: "MXN" })
   @IsOptional()
