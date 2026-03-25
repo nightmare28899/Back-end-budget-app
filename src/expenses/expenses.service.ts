@@ -3,12 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
 import { QueryExpenseDto } from "./dto/query-expense.dto";
-import { PaymentMethod, Prisma } from "@prisma/client";
+import { InstallmentFrequency, PaymentMethod, Prisma } from "@prisma/client";
 import {
   formatDateOnly,
   resolveBudgetWindow,
@@ -16,6 +17,10 @@ import {
 import { CreditCardsService } from "../credit-cards/credit-cards.service";
 import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
 import { normalizePaymentMethod } from "../common/payments/payment-method.utils";
+import {
+  buildInstallmentSchedule,
+  InstallmentFrequencyValue,
+} from "./installments/expense-installments.util";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
   include: {
@@ -30,6 +35,7 @@ type ExpenseWithPresignedUrl = ExpenseWithCategory & {
 
 const MAX_SYNC_BATCH_SIZE = 200;
 const DEFAULT_EXPENSE_CURRENCY = "MXN";
+const DEFAULT_INSTALLMENT_FREQUENCY = InstallmentFrequency.MONTHLY;
 
 @Injectable()
 export class ExpensesService {
@@ -61,6 +67,20 @@ export class ExpensesService {
         creditCardId: dto.creditCardId,
       },
     );
+
+    const installmentPlan = this.buildInstallmentPlan(dto);
+    if (installmentPlan) {
+      return this.createInstallmentExpenses({
+        userId,
+        dto,
+        imageUrl,
+        categoryId,
+        currency,
+        paymentMethod,
+        creditCardId,
+        installmentPlan,
+      });
+    }
 
     return this.prisma.expense.create({
       data: {
@@ -253,23 +273,14 @@ export class ExpensesService {
   async update(id: string, userId: string, dto: UpdateExpenseDto) {
     const existing = await this.findOne(id, userId);
 
-    let nextCategoryId = dto.categoryId;
-    if (dto.categoryId) {
-      const category = await this.prisma.category.findFirst({
-        where: { id: dto.categoryId, userId },
-        select: { id: true },
-      });
-
-      if (!category) {
-        throw new NotFoundException("Category not found for this user");
-      }
-
-      nextCategoryId = category.id;
-    }
+    const nextCategoryId =
+      dto.categoryId !== undefined
+        ? await this.resolveExistingCategoryId(userId, dto.categoryId)
+        : existing.categoryId;
 
     const nextPaymentMethod =
       dto.paymentMethod !== undefined
-        ? normalizePaymentMethod(dto.paymentMethod)
+        ? normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH
         : existing.paymentMethod;
     const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
       {
@@ -280,11 +291,68 @@ export class ExpensesService {
       },
     );
 
+    const nextCurrency = dto.currency ?? existing.currency;
+    const shouldUseInstallmentPlan = dto.isInstallment ?? existing.isInstallment;
+    if (shouldUseInstallmentPlan) {
+      const installmentPlan = this.buildInstallmentPlan(dto, {
+        totalAmount:
+          dto.cost ??
+          Number(existing.installmentTotalAmount ?? existing.cost),
+        installmentCount: dto.installmentCount ?? existing.installmentCount ?? 0,
+        frequency:
+          (dto.installmentFrequency as InstallmentFrequencyValue | undefined) ??
+          (existing.installmentFrequency as InstallmentFrequencyValue | null) ??
+          DEFAULT_INSTALLMENT_FREQUENCY,
+        purchaseDate:
+          dto.installmentPurchaseDate !== undefined
+            ? new Date(dto.installmentPurchaseDate)
+            : existing.installmentPurchaseDate ?? existing.date,
+        firstPaymentDate:
+          dto.installmentFirstPaymentDate !== undefined
+            ? new Date(dto.installmentFirstPaymentDate)
+            : existing.installmentFirstPaymentDate ?? existing.date,
+      });
+      if (!installmentPlan) {
+        throw new BadRequestException("Installment configuration is invalid");
+      }
+
+      return this.replaceInstallmentExpenses({
+        userId,
+        dto,
+        existing,
+        categoryId: nextCategoryId ?? null,
+        currency: nextCurrency,
+        paymentMethod: nextPaymentMethod,
+        creditCardId,
+        installmentPlan,
+      });
+    }
+
+    if (existing.isInstallment) {
+      return this.replaceInstallmentPlanWithSingleExpense({
+        userId,
+        dto,
+        existing,
+        categoryId: nextCategoryId ?? null,
+        currency: nextCurrency,
+        paymentMethod: nextPaymentMethod,
+        creditCardId,
+      });
+    }
+
     return this.prisma.expense.update({
       where: { id },
       data: {
         ...dto,
-        currency: dto.currency,
+        isInstallment: false,
+        installmentGroupId: null,
+        installmentCount: null,
+        installmentIndex: null,
+        installmentTotalAmount: null,
+        installmentFrequency: null,
+        installmentPurchaseDate: null,
+        installmentFirstPaymentDate: null,
+        currency: nextCurrency,
         paymentMethod: nextPaymentMethod,
         creditCardId,
         categoryId: nextCategoryId,
@@ -300,15 +368,55 @@ export class ExpensesService {
   async remove(id: string, userId: string) {
     const expense = await this.findOne(id, userId);
 
-    if (expense.imageUrl) {
+    if (!expense.isInstallment) {
+      if (expense.imageUrl) {
+        try {
+          await this.storageService.deleteFile(expense.imageUrl);
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      return this.prisma.expense.delete({ where: { id } });
+    }
+
+    const installmentGroupId = expense.installmentGroupId ?? expense.id;
+    const groupedExpenses = await this.prisma.expense.findMany({
+      where: {
+        userId,
+        OR: [{ id }, { installmentGroupId }],
+      },
+      select: { id: true, imageUrl: true },
+    });
+
+    const imageUrls = Array.from(
+      new Set(
+        groupedExpenses
+          .map((item) => item.imageUrl)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    for (const imageUrl of imageUrls) {
       try {
-        await this.storageService.deleteFile(expense.imageUrl);
+        await this.storageService.deleteFile(imageUrl);
       } catch (error) {
         console.error(error);
       }
     }
 
-    return this.prisma.expense.delete({ where: { id } });
+    await this.prisma.expense.deleteMany({
+      where: {
+        userId,
+        OR: [{ id }, { installmentGroupId }],
+      },
+    });
+
+    return {
+      deletedCount: groupedExpenses.length,
+      deletedExpenseIds: groupedExpenses.map((item) => item.id),
+      installmentGroupId,
+    };
   }
 
   async syncBatch(userId: string, expenses: CreateExpenseDto[]) {
@@ -328,6 +436,301 @@ export class ExpensesService {
       results.push(expense);
     }
     return results;
+  }
+
+  private buildInstallmentPlan(
+    dto: {
+      isInstallment?: boolean;
+      cost?: number;
+      installmentCount?: number;
+      installmentFrequency?: string;
+      installmentPurchaseDate?: string;
+      installmentFirstPaymentDate?: string;
+    },
+    fallback?: {
+      totalAmount: number;
+      installmentCount: number;
+      frequency: InstallmentFrequencyValue | InstallmentFrequency;
+      purchaseDate: Date;
+      firstPaymentDate: Date;
+    },
+  ) {
+    const isInstallment = dto.isInstallment ?? Boolean(fallback);
+    if (!isInstallment) {
+      return null;
+    }
+
+    const totalAmount = dto.cost ?? fallback?.totalAmount;
+    const installmentCount = dto.installmentCount ?? fallback?.installmentCount;
+    const frequency =
+      (dto.installmentFrequency as InstallmentFrequencyValue | undefined) ??
+      fallback?.frequency ??
+      DEFAULT_INSTALLMENT_FREQUENCY;
+    const firstPaymentDate = dto.installmentFirstPaymentDate
+      ? new Date(dto.installmentFirstPaymentDate)
+      : fallback?.firstPaymentDate;
+    const purchaseDate = dto.installmentPurchaseDate
+      ? new Date(dto.installmentPurchaseDate)
+      : fallback?.purchaseDate ?? firstPaymentDate;
+
+    if (
+      totalAmount == null ||
+      !Number.isFinite(totalAmount) ||
+      totalAmount <= 0
+    ) {
+      throw new BadRequestException(
+        "A valid total amount is required for installment expenses",
+      );
+    }
+    const normalizedTotalAmount = Number(totalAmount);
+
+    if (
+      installmentCount == null ||
+      !Number.isFinite(installmentCount) ||
+      installmentCount <= 1
+    ) {
+      throw new BadRequestException(
+        "installmentCount is required and must be greater than 1",
+      );
+    }
+
+    const normalizedInstallmentCount = Math.trunc(Number(installmentCount));
+
+    if (!firstPaymentDate || Number.isNaN(firstPaymentDate.getTime())) {
+      throw new BadRequestException(
+        "installmentFirstPaymentDate is required when isInstallment is true",
+      );
+    }
+
+    if (!purchaseDate || Number.isNaN(purchaseDate.getTime())) {
+      throw new BadRequestException(
+        "installmentPurchaseDate is invalid",
+      );
+    }
+
+    if (firstPaymentDate < purchaseDate) {
+      throw new BadRequestException(
+        "installmentFirstPaymentDate must be on or after installmentPurchaseDate",
+      );
+    }
+
+    const normalizedFrequency =
+      frequency === InstallmentFrequency.MONTHLY || frequency === "MONTHLY"
+        ? InstallmentFrequency.MONTHLY
+        : DEFAULT_INSTALLMENT_FREQUENCY;
+
+    return {
+      totalAmount: normalizedTotalAmount,
+      installmentCount: normalizedInstallmentCount,
+      frequency: normalizedFrequency,
+      purchaseDate,
+      firstPaymentDate,
+      schedule: buildInstallmentSchedule({
+        totalAmount: normalizedTotalAmount,
+        installmentCount: normalizedInstallmentCount,
+        firstPaymentDate,
+      }),
+    };
+  }
+
+  private async createInstallmentExpenses(input: {
+    userId: string;
+    dto: CreateExpenseDto;
+    imageUrl?: string;
+    categoryId: string;
+    currency: string;
+    paymentMethod: PaymentMethod;
+    creditCardId: string | null;
+    installmentPlan: NonNullable<ReturnType<ExpensesService["buildInstallmentPlan"]>>;
+  }) {
+    const installmentGroupId = randomUUID();
+
+    return this.prisma.$transaction(async (tx) => {
+      const createdExpenses: ExpenseWithCategory[] = [];
+
+      for (const scheduleItem of input.installmentPlan.schedule) {
+        const created = await tx.expense.create({
+          data: {
+            title: input.dto.title,
+            cost: scheduleItem.amount,
+            currency: input.currency,
+            paymentMethod: input.paymentMethod,
+            creditCardId: input.creditCardId,
+            note: input.dto.note,
+            date: scheduleItem.paymentDate,
+            categoryId: input.categoryId,
+            imageUrl: input.imageUrl,
+            userId: input.userId,
+            isInstallment: true,
+            installmentGroupId,
+            installmentCount: input.installmentPlan.installmentCount,
+            installmentIndex: scheduleItem.installmentIndex,
+            installmentTotalAmount: input.installmentPlan.totalAmount,
+            installmentFrequency: input.installmentPlan.frequency,
+            installmentPurchaseDate: input.installmentPlan.purchaseDate,
+            installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
+          },
+          include: {
+            category: true,
+            creditCard: { select: creditCardPublicSelect },
+          },
+        });
+
+        createdExpenses.push(created);
+      }
+
+      return createdExpenses[0];
+    });
+  }
+
+  private async replaceInstallmentExpenses(input: {
+    userId: string;
+    dto: UpdateExpenseDto;
+    existing: ExpenseWithPresignedUrl;
+    categoryId: string | null;
+    currency: string;
+    paymentMethod: PaymentMethod;
+    creditCardId: string | null;
+    installmentPlan: NonNullable<ReturnType<ExpensesService["buildInstallmentPlan"]>>;
+  }) {
+    const installmentGroupId =
+      input.existing.installmentGroupId ?? input.existing.id;
+    const keepImageUrl = input.existing.imageUrl ?? undefined;
+    const selectedInstallmentIndex =
+      input.existing.installmentIndex && input.existing.installmentIndex > 0
+        ? input.existing.installmentIndex
+        : 1;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.expense.deleteMany({
+        where: {
+          userId: input.userId,
+          OR: [{ id: input.existing.id }, { installmentGroupId }],
+        },
+      });
+
+      const createdExpenses: ExpenseWithCategory[] = [];
+
+      for (const scheduleItem of input.installmentPlan.schedule) {
+        const created = await tx.expense.create({
+          data: {
+            title: input.dto.title ?? input.existing.title,
+            cost: scheduleItem.amount,
+            currency: input.currency,
+            paymentMethod: input.paymentMethod,
+            creditCardId: input.creditCardId,
+            note:
+              input.dto.note !== undefined
+                ? input.dto.note
+                : input.existing.note ?? undefined,
+            date: scheduleItem.paymentDate,
+            categoryId: input.categoryId ?? undefined,
+            imageUrl: keepImageUrl,
+            userId: input.userId,
+            isInstallment: true,
+            installmentGroupId,
+            installmentCount: input.installmentPlan.installmentCount,
+            installmentIndex: scheduleItem.installmentIndex,
+            installmentTotalAmount: input.installmentPlan.totalAmount,
+            installmentFrequency: input.installmentPlan.frequency,
+            installmentPurchaseDate: input.installmentPlan.purchaseDate,
+            installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
+          },
+          include: {
+            category: true,
+            creditCard: { select: creditCardPublicSelect },
+          },
+        });
+
+        createdExpenses.push(created);
+      }
+
+      return (
+        createdExpenses.find(
+          (item) => item.installmentIndex === selectedInstallmentIndex,
+        ) ?? createdExpenses[0]
+      );
+    });
+  }
+
+  private async replaceInstallmentPlanWithSingleExpense(input: {
+    userId: string;
+    dto: UpdateExpenseDto;
+    existing: ExpenseWithPresignedUrl;
+    categoryId: string | null;
+    currency: string;
+    paymentMethod: PaymentMethod;
+    creditCardId: string | null;
+  }) {
+    const installmentGroupId =
+      input.existing.installmentGroupId ?? input.existing.id;
+    const nextDate =
+      input.dto.date !== undefined
+        ? new Date(input.dto.date)
+        : input.existing.installmentPurchaseDate ?? input.existing.date;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.expense.deleteMany({
+        where: {
+          userId: input.userId,
+          OR: [{ id: input.existing.id }, { installmentGroupId }],
+        },
+      });
+
+      return tx.expense.create({
+        data: {
+          title: input.dto.title ?? input.existing.title,
+          cost:
+            input.dto.cost ??
+            Number(
+              input.existing.installmentTotalAmount ?? input.existing.cost,
+            ),
+          currency: input.currency,
+          paymentMethod: input.paymentMethod,
+          creditCardId: input.creditCardId,
+          note:
+            input.dto.note !== undefined
+              ? input.dto.note
+              : input.existing.note ?? undefined,
+          date: nextDate,
+          categoryId: input.categoryId ?? undefined,
+          imageUrl: input.existing.imageUrl ?? undefined,
+          userId: input.userId,
+          isInstallment: false,
+          installmentGroupId: null,
+          installmentCount: null,
+          installmentIndex: null,
+          installmentTotalAmount: null,
+          installmentFrequency: null,
+          installmentPurchaseDate: null,
+          installmentFirstPaymentDate: null,
+        },
+        include: {
+          category: true,
+          creditCard: { select: creditCardPublicSelect },
+        },
+      });
+    });
+  }
+
+  private async resolveExistingCategoryId(
+    userId: string,
+    categoryId: string | null,
+  ): Promise<string | null> {
+    if (!categoryId) {
+      return null;
+    }
+
+    const category = await this.prisma.category.findFirst({
+      where: { id: categoryId, userId },
+      select: { id: true },
+    });
+
+    if (!category) {
+      throw new NotFoundException("Category not found for this user");
+    }
+
+    return category.id;
   }
 
   private async resolveCategoryId(

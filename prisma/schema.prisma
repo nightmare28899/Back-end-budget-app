@@ -20,6 +20,10 @@ enum PaymentMethod {
   TRANSFER
 }
 
+enum InstallmentFrequency {
+  MONTHLY
+}
+
 enum SavingsTransactionType {
   DEPOSIT
   WITHDRAW
@@ -87,31 +91,41 @@ model Category {
 }
 
 model Expense {
-  id         String    @id @default(uuid())
-  title      String
-  cost       Decimal   @db.Decimal(10, 2)
-  currency   String    @default("MXN")
-  paymentMethod PaymentMethod @default(CASH)
-  creditCardId String?
-  isSubscription Boolean @default(false)
-  subscriptionId String?
-  imageUrl   String?
-  note       String?
-  date       DateTime  @default(now())
-  categoryId String?
-  userId     String
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  category   Category? @relation(fields: [categoryId], references: [id])
-  creditCard CreditCard? @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
-  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                          String               @id @default(uuid())
+  title                       String
+  cost                        Decimal              @db.Decimal(10, 2)
+  currency                    String               @default("MXN")
+  paymentMethod               PaymentMethod        @default(CASH)
+  creditCardId                String?
+  isSubscription              Boolean              @default(false)
+  subscriptionId              String?
+  isInstallment               Boolean              @default(false)
+  installmentGroupId          String?
+  installmentCount            Int?
+  installmentIndex            Int?
+  installmentTotalAmount      Decimal?             @db.Decimal(10, 2)
+  installmentFrequency        InstallmentFrequency?
+  installmentPurchaseDate     DateTime?
+  installmentFirstPaymentDate DateTime?
+  imageUrl                    String?
+  note                        String?
+  date                        DateTime             @default(now())
+  categoryId                  String?
+  userId                      String
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+  category                    Category?            @relation(fields: [categoryId], references: [id])
+  creditCard                  CreditCard?          @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
+  subscription                Subscription?        @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  user                        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
   @@index([userId, categoryId])
   @@index([userId, isSubscription, date])
+  @@index([userId, isInstallment, date])
   @@index([creditCardId])
   @@index([subscriptionId])
+  @@index([installmentGroupId])
   @@map("expenses")
 }
 

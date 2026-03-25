@@ -1,10 +1,12 @@
 import {
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   IsDateString,
   Min,
+  IsInt,
   MaxLength,
   IsUUID,
   Matches,
@@ -17,6 +19,7 @@ import {
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
 import { PAYMENT_METHOD_VALUES } from "../../common/payments/payment-method.utils";
+import { INSTALLMENT_FREQUENCY_VALUES } from "../installments/expense-installments.util";
 
 export class CreateExpenseDto {
   @ApiProperty({ example: "Coffee at Starbucks" })
@@ -65,6 +68,56 @@ export class CreateExpenseDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "When true, the expense is stored as an installment schedule instead of a single payment.",
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === "true")
+  @IsBoolean()
+  isInstallment?: boolean;
+
+  @ApiPropertyOptional({
+    example: 4,
+    description: "Required when isInstallment is true. Must be greater than 1.",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(2)
+  @Type(() => Number)
+  installmentCount?: number;
+
+  @ApiPropertyOptional({
+    example: "MONTHLY",
+    enum: INSTALLMENT_FREQUENCY_VALUES,
+    description:
+      "Payment frequency for installment expenses. Monthly is the only supported value for now.",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
+  @IsString()
+  @IsIn([...INSTALLMENT_FREQUENCY_VALUES])
+  installmentFrequency?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-03-25T12:00:00.000Z",
+    description:
+      "Original purchase date for the installment plan. Defaults to the first payment date when omitted.",
+  })
+  @IsOptional()
+  @IsDateString()
+  installmentPurchaseDate?: string;
+
+  @ApiPropertyOptional({
+    example: "2026-04-01T12:00:00.000Z",
+    description:
+      "First payment date for the installment plan. Required when isInstallment is true.",
+  })
+  @IsOptional()
+  @IsDateString()
+  installmentFirstPaymentDate?: string;
 
   @ApiPropertyOptional({ example: "2026-02-27T12:00:00.000Z" })
   @IsOptional()
