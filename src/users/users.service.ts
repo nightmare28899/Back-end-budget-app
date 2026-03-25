@@ -224,6 +224,9 @@ export class UsersService {
     }
 
     const budgetData = this.resolveBudgetForUpdate(dto, current);
+    const hashedPassword = dto.password
+      ? await bcrypt.hash(dto.password, 10)
+      : undefined;
 
     const user = await this.prisma.user.update({
       where: { id: userId },
@@ -236,6 +239,7 @@ export class UsersService {
               deletedAt: dto.isActive ? null : new Date(),
             }
           : {}),
+        ...(hashedPassword ? { password: hashedPassword } : {}),
         ...budgetData,
         avatarUrl: nextAvatarKey ?? undefined,
       },
