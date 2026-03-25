@@ -21,6 +21,7 @@ import {
   buildInstallmentSchedule,
   InstallmentFrequencyValue,
 } from "./installments/expense-installments.util";
+import { EntitlementsService } from "../common/entitlements/entitlements.service";
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
   include: {
@@ -43,6 +44,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
     private readonly creditCardsService: CreditCardsService,
+    private readonly entitlementsService: EntitlementsService,
   ) {}
 
   async create(
@@ -60,16 +62,16 @@ export class ExpensesService {
     const currency = dto.currency ?? (await this.getUserCurrency(userId));
     const paymentMethod =
       normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH;
-    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
-      {
+    const creditCardId =
+      await this.creditCardsService.resolveLinkedCreditCardId({
         userId,
         paymentMethod,
         creditCardId: dto.creditCardId,
-      },
-    );
+      });
 
     const installmentPlan = this.buildInstallmentPlan(dto);
     if (installmentPlan) {
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
       return this.createInstallmentExpenses({
         userId,
         dto,
@@ -199,28 +201,30 @@ export class ExpensesService {
       where.categoryId = query.categoryId;
     }
 
-    const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all([
-      this.prisma.expense.findMany({
-        where,
-        include: {
-          category: true,
-          creditCard: { select: creditCardPublicSelect },
-        },
-        orderBy: { date: "desc" },
-        skip,
-        take: limit,
-      }),
-      this.prisma.expense.count({ where }),
-      this.prisma.expense.aggregate({
-        where,
-        _sum: { cost: true },
-      }),
-      this.prisma.expense.groupBy({
-        by: ["currency"],
-        where,
-        _sum: { cost: true },
-      }),
-    ]);
+    const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all(
+      [
+        this.prisma.expense.findMany({
+          where,
+          include: {
+            category: true,
+            creditCard: { select: creditCardPublicSelect },
+          },
+          orderBy: { date: "desc" },
+          skip,
+          take: limit,
+        }),
+        this.prisma.expense.count({ where }),
+        this.prisma.expense.aggregate({
+          where,
+          _sum: { cost: true },
+        }),
+        this.prisma.expense.groupBy({
+          by: ["currency"],
+          where,
+          _sum: { cost: true },
+        }),
+      ],
+    );
 
     const total = Number(sumResult._sum.cost ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
@@ -280,25 +284,26 @@ export class ExpensesService {
 
     const nextPaymentMethod =
       dto.paymentMethod !== undefined
-        ? normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH
+        ? (normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH)
         : existing.paymentMethod;
-    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
-      {
+    const creditCardId =
+      await this.creditCardsService.resolveLinkedCreditCardId({
         userId,
         paymentMethod: nextPaymentMethod,
         creditCardId: dto.creditCardId,
         existingCreditCardId: existing.creditCardId ?? null,
-      },
-    );
+      });
 
     const nextCurrency = dto.currency ?? existing.currency;
-    const shouldUseInstallmentPlan = dto.isInstallment ?? existing.isInstallment;
+    const shouldUseInstallmentPlan =
+      dto.isInstallment ?? existing.isInstallment;
     if (shouldUseInstallmentPlan) {
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
       const installmentPlan = this.buildInstallmentPlan(dto, {
         totalAmount:
-          dto.cost ??
-          Number(existing.installmentTotalAmount ?? existing.cost),
-        installmentCount: dto.installmentCount ?? existing.installmentCount ?? 0,
+          dto.cost ?? Number(existing.installmentTotalAmount ?? existing.cost),
+        installmentCount:
+          dto.installmentCount ?? existing.installmentCount ?? 0,
         frequency:
           (dto.installmentFrequency as InstallmentFrequencyValue | undefined) ??
           (existing.installmentFrequency as InstallmentFrequencyValue | null) ??
@@ -306,11 +311,11 @@ export class ExpensesService {
         purchaseDate:
           dto.installmentPurchaseDate !== undefined
             ? new Date(dto.installmentPurchaseDate)
-            : existing.installmentPurchaseDate ?? existing.date,
+            : (existing.installmentPurchaseDate ?? existing.date),
         firstPaymentDate:
           dto.installmentFirstPaymentDate !== undefined
             ? new Date(dto.installmentFirstPaymentDate)
-            : existing.installmentFirstPaymentDate ?? existing.date,
+            : (existing.installmentFirstPaymentDate ?? existing.date),
       });
       if (!installmentPlan) {
         throw new BadRequestException("Installment configuration is invalid");
@@ -430,6 +435,11 @@ export class ExpensesService {
       );
     }
 
+    const includesInstallments = expenses.some((dto) => dto.isInstallment);
+    if (includesInstallments) {
+      await this.entitlementsService.assertPremium(userId, "installment_expenses");
+    }
+
     const results = [];
     for (const dto of expenses) {
       const expense = await this.create(userId, dto);
@@ -471,7 +481,7 @@ export class ExpensesService {
       : fallback?.firstPaymentDate;
     const purchaseDate = dto.installmentPurchaseDate
       ? new Date(dto.installmentPurchaseDate)
-      : fallback?.purchaseDate ?? firstPaymentDate;
+      : (fallback?.purchaseDate ?? firstPaymentDate);
 
     if (
       totalAmount == null ||
@@ -503,9 +513,7 @@ export class ExpensesService {
     }
 
     if (!purchaseDate || Number.isNaN(purchaseDate.getTime())) {
-      throw new BadRequestException(
-        "installmentPurchaseDate is invalid",
-      );
+      throw new BadRequestException("installmentPurchaseDate is invalid");
     }
 
     if (firstPaymentDate < purchaseDate) {
@@ -541,7 +549,9 @@ export class ExpensesService {
     currency: string;
     paymentMethod: PaymentMethod;
     creditCardId: string | null;
-    installmentPlan: NonNullable<ReturnType<ExpensesService["buildInstallmentPlan"]>>;
+    installmentPlan: NonNullable<
+      ReturnType<ExpensesService["buildInstallmentPlan"]>
+    >;
   }) {
     const installmentGroupId = randomUUID();
 
@@ -591,7 +601,9 @@ export class ExpensesService {
     currency: string;
     paymentMethod: PaymentMethod;
     creditCardId: string | null;
-    installmentPlan: NonNullable<ReturnType<ExpensesService["buildInstallmentPlan"]>>;
+    installmentPlan: NonNullable<
+      ReturnType<ExpensesService["buildInstallmentPlan"]>
+    >;
   }) {
     const installmentGroupId =
       input.existing.installmentGroupId ?? input.existing.id;
@@ -622,7 +634,7 @@ export class ExpensesService {
             note:
               input.dto.note !== undefined
                 ? input.dto.note
-                : input.existing.note ?? undefined,
+                : (input.existing.note ?? undefined),
             date: scheduleItem.paymentDate,
             categoryId: input.categoryId ?? undefined,
             imageUrl: keepImageUrl,
@@ -667,7 +679,7 @@ export class ExpensesService {
     const nextDate =
       input.dto.date !== undefined
         ? new Date(input.dto.date)
-        : input.existing.installmentPurchaseDate ?? input.existing.date;
+        : (input.existing.installmentPurchaseDate ?? input.existing.date);
 
     return this.prisma.$transaction(async (tx) => {
       await tx.expense.deleteMany({
@@ -691,7 +703,7 @@ export class ExpensesService {
           note:
             input.dto.note !== undefined
               ? input.dto.note
-              : input.existing.note ?? undefined,
+              : (input.existing.note ?? undefined),
           date: nextDate,
           categoryId: input.categoryId ?? undefined,
           imageUrl: input.existing.imageUrl ?? undefined,

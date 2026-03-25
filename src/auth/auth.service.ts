@@ -45,6 +45,7 @@ export class AuthService {
         role: dto.role ?? "user",
         avatarUrl,
         isActive: true,
+        isPremium: false,
         deletedAt: null,
       },
       select: {
@@ -60,6 +61,7 @@ export class AuthService {
         budgetPeriodEnd: true,
         currency: true,
         isActive: true,
+        isPremium: true,
         deletedAt: true,
       },
     });
@@ -69,6 +71,8 @@ export class AuthService {
 
     return {
       message: "User registered successfully",
+      isAuthenticated: true,
+      account: this.buildAccountState(user),
       user: authUser,
       ...tokens,
     };
@@ -91,6 +95,7 @@ export class AuthService {
         budgetPeriodEnd: true,
         currency: true,
         isActive: true,
+        isPremium: true,
         deletedAt: true,
       },
     });
@@ -130,10 +135,13 @@ export class AuthService {
       budgetPeriodStart: user.budgetPeriodStart,
       budgetPeriodEnd: user.budgetPeriodEnd,
       currency: user.currency,
+      isPremium: user.isPremium,
     });
 
     return {
       message: "Login successful",
+      isAuthenticated: true,
+      account: this.buildAccountState(user),
       user: authUser,
       ...tokens,
     };
@@ -160,6 +168,7 @@ export class AuthService {
           budgetPeriodEnd: true,
           currency: true,
           isActive: true,
+          isPremium: true,
           deletedAt: true,
         },
       });
@@ -193,10 +202,13 @@ export class AuthService {
         budgetPeriodStart: user.budgetPeriodStart,
         budgetPeriodEnd: user.budgetPeriodEnd,
         currency: user.currency,
+        isPremium: user.isPremium,
       });
 
       return {
         message: "Session renewed successfully",
+        isAuthenticated: true,
+        account: this.buildAccountState(user),
         user: authUser,
         ...tokens,
       };
@@ -208,6 +220,15 @@ export class AuthService {
     }
   }
 
+
+  private buildAccountState(user: { isActive: boolean; isPremium: boolean; deletedAt: Date | null }) {
+    return {
+      isActive: user.isActive,
+      isPremium: user.isPremium,
+      isDisabled: !user.isActive || Boolean(user.deletedAt),
+      deletedAt: user.deletedAt,
+    };
+  }
   private async generateTokens(userId: string, email: string) {
     const payload = { sub: userId, email };
 

@@ -97,6 +97,23 @@ export class UpdateUserDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
+    example: false,
+    description: "Premium entitlement flag (admin only)",
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase().trim();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return undefined;
+  })
+  @IsBoolean()
+  isPremium?: boolean;
+
+  @ApiPropertyOptional({
     example: "tempPass123",
     minLength: 6,
     description: "Temporary password set by admin",

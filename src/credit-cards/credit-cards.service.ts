@@ -10,12 +10,17 @@ import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
 import { QueryCreditCardsDto } from "./dto/query-credit-cards.dto";
 import { creditCardPublicSelect } from "./credit-card.select";
 import { isCreditCardPaymentMethod } from "../common/payments/payment-method.utils";
+import { EntitlementsService } from "../common/entitlements/entitlements.service";
 
 @Injectable()
 export class CreditCardsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly entitlementsService: EntitlementsService,
+  ) {}
 
   async create(userId: string, dto: CreateCreditCardDto) {
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
     return this.prisma.creditCard.create({
       data: {
         userId,
@@ -34,6 +39,8 @@ export class CreditCardsService {
   }
 
   async findAll(userId: string, query?: QueryCreditCardsDto) {
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
+
     return this.prisma.creditCard.findMany({
       where: {
         userId,
@@ -45,6 +52,8 @@ export class CreditCardsService {
   }
 
   async findOne(id: string, userId: string, includeInactive = true) {
+    await this.entitlementsService.assertPremium(userId, "credit_cards_catalog");
+
     const card = await this.prisma.creditCard.findFirst({
       where: {
         id,
@@ -100,6 +109,8 @@ export class CreditCardsService {
     if (!isCreditCardPaymentMethod(params.paymentMethod)) {
       return null;
     }
+
+    await this.entitlementsService.assertPremium(params.userId, "credit_cards_catalog");
 
     const cardId = params.creditCardId ?? params.existingCreditCardId ?? null;
 

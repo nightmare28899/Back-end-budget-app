@@ -61,8 +61,32 @@ export class UsersController {
 
     return {
       message: "Users retrieved successfully",
+      isAuthenticated: true,
       count: users.length,
       users,
+    };
+  }
+
+  @Get("me/entitlements")
+  @ApiOperation({ summary: "Get current user entitlement and account status" })
+  async getEntitlements(@CurrentUser() user: CurrentUserType) {
+    const profile = await this.usersService.getProfile(user.id);
+
+    if (!profile) {
+      return {
+        isAuthenticated: true,
+        account: null,
+      };
+    }
+
+    return {
+      isAuthenticated: true,
+      account: {
+        isActive: profile.isActive,
+        isPremium: profile.isPremium,
+        isDisabled: !profile.isActive || Boolean(profile.deletedAt),
+        deletedAt: profile.deletedAt,
+      },
     };
   }
 
@@ -71,8 +95,24 @@ export class UsersController {
   async getProfile(@CurrentUser() user: CurrentUserType) {
     const profile = await this.usersService.getProfile(user.id);
 
+    if (!profile) {
+      return {
+        message: "User profile retrieved successfully",
+        isAuthenticated: true,
+        account: null,
+        user: null,
+      };
+    }
+
     return {
       message: "User profile retrieved successfully",
+      isAuthenticated: true,
+      account: {
+        isActive: profile.isActive,
+        isPremium: profile.isPremium,
+        isDisabled: !profile.isActive || Boolean(profile.deletedAt),
+        deletedAt: profile.deletedAt,
+      },
       user: profile,
     };
   }
@@ -92,6 +132,7 @@ export class UsersController {
 
     return {
       message: "User retrieved successfully",
+      isAuthenticated: true,
       user: foundUser,
     };
   }
@@ -115,6 +156,7 @@ export class UsersController {
         budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         isActive: { type: "boolean" },
+        isPremium: { type: "boolean" },
         password: { type: "string", minLength: 6 },
         avatar: { type: "string", format: "binary" },
       },
@@ -128,12 +170,14 @@ export class UsersController {
   ) {
     const updatedUser = await this.usersService.updateProfile(
       user.id,
+      user,
       dto,
       avatar,
     );
 
     return {
       message: "User profile updated successfully",
+      isAuthenticated: true,
       user: updatedUser,
     };
   }
@@ -157,6 +201,7 @@ export class UsersController {
         budgetPeriodEnd: { type: "string", format: "date-time" },
         currency: { type: "string" },
         isActive: { type: "boolean" },
+        isPremium: { type: "boolean" },
         password: { type: "string", minLength: 6 },
         avatar: { type: "string", format: "binary" },
       },
@@ -173,6 +218,7 @@ export class UsersController {
 
     return {
       message: "User updated successfully",
+      isAuthenticated: true,
       user: updatedUser,
     };
   }

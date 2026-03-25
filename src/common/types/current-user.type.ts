@@ -9,4 +9,5 @@ export interface CurrentUserType {
   budgetPeriodStart?: string | null;
   budgetPeriodEnd?: string | null;
   currency: string;
+  isPremium?: boolean;
 }

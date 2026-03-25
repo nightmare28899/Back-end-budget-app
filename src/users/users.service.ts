@@ -31,6 +31,7 @@ const userSelect = {
   budgetPeriodEnd: true,
   currency: true,
   isActive: true,
+  isPremium: true,
   deletedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -76,6 +77,7 @@ export class UsersService {
         ...budgetData,
         currency: dto.currency,
         isActive: true,
+        isPremium: false,
         deletedAt: null,
       },
       select: userSelect,
@@ -142,10 +144,11 @@ export class UsersService {
 
   async updateProfile(
     userId: string,
+    currentUser: CurrentUserType,
     dto: UpdateUserDto,
     avatarFile?: Express.Multer.File,
   ) {
-    return this.updateUser(userId, dto, avatarFile);
+    return this.updateUser(userId, currentUser, dto, avatarFile);
   }
 
   async update(
@@ -155,7 +158,7 @@ export class UsersService {
     avatarFile?: Express.Multer.File,
   ) {
     this.assertCanManageUser(currentUser, userId);
-    return this.updateUser(userId, dto, avatarFile);
+    return this.updateUser(userId, currentUser, dto, avatarFile);
   }
 
   async disable(userId: string, currentUser: CurrentUserType) {
@@ -194,6 +197,7 @@ export class UsersService {
 
   private async updateUser(
     userId: string,
+    currentUser: CurrentUserType,
     dto: UpdateUserDto,
     avatarFile?: Express.Multer.File,
   ) {
@@ -212,6 +216,27 @@ export class UsersService {
 
     if (!current) {
       throw new NotFoundException("User not found");
+    }
+
+    const isAdmin = currentUser.role.toLowerCase() === "admin";
+    const isSelf = currentUser.id === userId;
+
+    if (dto.isPremium !== undefined && !isAdmin) {
+      throw new ForbiddenException(
+        "Only administrators can change premium entitlement",
+      );
+    }
+
+    if (dto.isActive !== undefined && !isAdmin) {
+      throw new ForbiddenException(
+        "Only administrators can change account active status",
+      );
+    }
+
+    if (dto.password !== undefined && !isAdmin && !isSelf) {
+      throw new ForbiddenException(
+        "Only administrators can set temporary passwords for other users",
+      );
     }
 
     let nextAvatarKey: string | undefined;
@@ -239,6 +264,7 @@ export class UsersService {
               deletedAt: dto.isActive ? null : new Date(),
             }
           : {}),
+        ...(dto.isPremium !== undefined ? { isPremium: dto.isPremium } : {}),
         ...(hashedPassword ? { password: hashedPassword } : {}),
         ...budgetData,
         avatarUrl: nextAvatarKey ?? undefined,
