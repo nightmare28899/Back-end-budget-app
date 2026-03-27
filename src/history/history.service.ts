@@ -7,6 +7,8 @@ export class HistoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getHistory(userId: string) {
+    const now = new Date();
+
     const [user, expenses, subscriptions] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -25,7 +27,10 @@ export class HistoryService {
         },
       }),
       this.prisma.expense.findMany({
-        where: { userId },
+        where: {
+          userId,
+          date: { lte: now },
+        },
         include: {
           category: true,
           creditCard: { select: creditCardPublicSelect },
@@ -53,7 +58,8 @@ export class HistoryService {
     for (const expense of expenses) {
       expenseCurrencyTotals.set(
         expense.currency,
-        (expenseCurrencyTotals.get(expense.currency) ?? 0) + Number(expense.cost),
+        (expenseCurrencyTotals.get(expense.currency) ?? 0) +
+          Number(expense.cost),
       );
     }
 
@@ -79,12 +85,12 @@ export class HistoryService {
         expenseCount: expenses.length,
         totalExpenses: this.roundMoney(totalExpenses),
         expenseCurrency: user.currency,
-        expenseTotalsByCurrency: Array.from(expenseCurrencyTotals.entries()).map(
-          ([currency, total]) => ({
-            currency,
-            total: this.roundMoney(total),
-          }),
-        ),
+        expenseTotalsByCurrency: Array.from(
+          expenseCurrencyTotals.entries(),
+        ).map(([currency, total]) => ({
+          currency,
+          total: this.roundMoney(total),
+        })),
         subscriptionCount: subscriptions.length,
         activeSubscriptionCount: activeSubscriptions.length,
         totalActiveSubscriptions: this.roundMoney(totalActiveSubscriptions),

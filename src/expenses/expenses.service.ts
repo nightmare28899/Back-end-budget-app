@@ -38,6 +38,10 @@ const MAX_SYNC_BATCH_SIZE = 200;
 const DEFAULT_EXPENSE_CURRENCY = "MXN";
 const DEFAULT_INSTALLMENT_FREQUENCY = InstallmentFrequency.MONTHLY;
 
+function minDate(first: Date, second: Date) {
+  return first.getTime() <= second.getTime() ? first : second;
+}
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -144,11 +148,12 @@ export class ExpensesService {
       budgetPeriodStart: user?.budgetPeriodStart,
       budgetPeriodEnd: user?.budgetPeriodEnd,
     });
+    const expenseWindowEnd = minDate(budgetWindow.end, new Date());
 
     const aggregatedPeriodExpenses = await this.prisma.expense.aggregate({
       where: {
         userId,
-        date: { gte: budgetWindow.start, lte: budgetWindow.end },
+        date: { gte: budgetWindow.start, lte: expenseWindowEnd },
       },
       _sum: { cost: true },
     });
@@ -182,15 +187,25 @@ export class ExpensesService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
+    const now = new Date();
 
     if (query.from || query.to) {
-      where.date = {};
-      if (query.from) where.date.gte = new Date(query.from);
+      const dateFilter: Prisma.DateTimeFilter = {
+        lte: now,
+      };
+
+      if (query.from) {
+        dateFilter.gte = new Date(query.from);
+      }
       if (query.to) {
         const toDate = new Date(query.to);
         toDate.setHours(23, 59, 59, 999);
-        where.date.lte = toDate;
+        dateFilter.lte = minDate(toDate, now);
       }
+
+      where.date = dateFilter;
+    } else {
+      where.date = { lte: now };
     }
 
     if (query.q) {
@@ -306,7 +321,7 @@ export class ExpensesService {
           dto.installmentCount ?? existing.installmentCount ?? 0,
         frequency:
           (dto.installmentFrequency as InstallmentFrequencyValue | undefined) ??
-          (existing.installmentFrequency as InstallmentFrequencyValue | null) ??
+          existing.installmentFrequency ??
           DEFAULT_INSTALLMENT_FREQUENCY,
         purchaseDate:
           dto.installmentPurchaseDate !== undefined
@@ -460,7 +475,7 @@ export class ExpensesService {
     fallback?: {
       totalAmount: number;
       installmentCount: number;
-      frequency: InstallmentFrequencyValue | InstallmentFrequency;
+      frequency: InstallmentFrequency;
       purchaseDate: Date;
       firstPaymentDate: Date;
     },

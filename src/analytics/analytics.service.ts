@@ -42,11 +42,13 @@ export class AnalyticsService {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - (days - 1));
     startDate.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
 
     const expenses = await this.prisma.expense.findMany({
       where: {
         userId,
-        date: { gte: startDate },
+        date: { gte: startDate, lte: endOfToday },
       },
       select: { cost: true, date: true },
       orderBy: { date: "asc" },
@@ -76,6 +78,7 @@ export class AnalyticsService {
     to?: string,
   ): Promise<CategoryBreakdownItem[]> {
     const where: Prisma.ExpenseWhereInput = { userId };
+    const now = new Date();
 
     if (from || to) {
       const dateFilter: Prisma.DateTimeFilter = {};
@@ -86,10 +89,14 @@ export class AnalyticsService {
       if (to) {
         const toDate = new Date(to);
         toDate.setHours(23, 59, 59, 999);
-        dateFilter.lte = toDate;
+        dateFilter.lte = toDate.getTime() <= now.getTime() ? toDate : now;
+      } else {
+        dateFilter.lte = now;
       }
 
       where.date = dateFilter;
+    } else {
+      where.date = { lte: now };
     }
 
     const expenses = await this.prisma.expense.findMany({
@@ -158,11 +165,14 @@ export class AnalyticsService {
       budgetPeriodStart: user?.budgetPeriodStart,
       budgetPeriodEnd: user?.budgetPeriodEnd,
     });
+    const now = new Date();
+    const expenseWindowEnd =
+      budgetWindow.end.getTime() <= now.getTime() ? budgetWindow.end : now;
 
     const expenses = await this.prisma.expense.findMany({
       where: {
         userId,
-        date: { gte: budgetWindow.start, lte: budgetWindow.end },
+        date: { gte: budgetWindow.start, lte: expenseWindowEnd },
       },
       include: { category: true },
       orderBy: { date: "asc" },
