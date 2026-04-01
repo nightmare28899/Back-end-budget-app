@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
+import { Cron, CronExpression } from "@nestjs/schedule";
 import * as bcrypt from "bcrypt";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { StringValue } from "ms";
@@ -48,6 +49,9 @@ interface AuthResponseOptions {
   sessionId?: string;
   previousRefreshTokenId?: string;
 }
+
+const DEFAULT_AUTH_SESSION_RETENTION_DAYS = 30;
+const DEFAULT_REFRESH_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -91,36 +95,61 @@ export class AuthService {
       select: AUTH_USER_SELECT,
     });
 
+    this.logSecurityEvent("log", "auth.register.success", {
+      userId: user.id,
+      email: this.maskEmail(user.email),
+    });
+
     return this.createAuthResponse(user, "User registered successfully");
   }
 
   async login(dto: LoginDto) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email: normalizedEmail },
       select: LOGIN_USER_SELECT,
     });
 
     if (!user) {
+      this.logSecurityEvent("warn", "auth.login.invalid_user", {
+        email: this.maskEmail(normalizedEmail),
+      });
       throw new UnauthorizedException("Invalid credentials");
     }
 
     if (!user.isActive) {
+      this.logSecurityEvent("warn", "auth.login.disabled_account", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
       throw new UnauthorizedException("Account is disabled");
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.password);
 
     if (!passwordValid) {
+      this.logSecurityEvent("warn", "auth.login.invalid_password", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
       throw new UnauthorizedException("Invalid credentials");
     }
 
     if (user.deletedAt) {
+      this.logSecurityEvent("log", "auth.login.restore_deleted_user", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
       return this.createAuthResponse(
         await this.restoreDeletedUser(user.id),
         "Login successful",
       );
     }
 
+    this.logSecurityEvent("log", "auth.login.success", {
+      userId: user.id,
+      email: this.maskEmail(user.email),
+    });
     return this.createAuthResponse(user, "Login successful");
   }
 
@@ -129,11 +158,17 @@ export class AuthService {
     const provider = decodedToken.firebase?.sign_in_provider;
 
     if (provider !== "google.com") {
+      this.logSecurityEvent("warn", "auth.google.unsupported_provider", {
+        provider,
+      });
       throw new UnauthorizedException("Unsupported Google sign-in provider");
     }
 
     const email = decodedToken.email?.trim().toLowerCase();
     if (!email || decodedToken.email_verified !== true) {
+      this.logSecurityEvent("warn", "auth.google.unverified_email", {
+        email: this.maskEmail(email),
+      });
       throw new UnauthorizedException("Google account email is not verified");
     }
     const googleAvatarUrl = this.resolveGoogleAvatarUrl(decodedToken.picture);
@@ -173,16 +208,28 @@ export class AuthService {
     }
 
     if (!user.isActive) {
+      this.logSecurityEvent("warn", "auth.google.disabled_account", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
       throw new UnauthorizedException("Account is disabled");
     }
 
     if (user.deletedAt) {
+      this.logSecurityEvent("log", "auth.google.restore_deleted_user", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
       return this.createAuthResponse(
         await this.restoreDeletedUser(user.id),
         "Google authentication successful",
       );
     }
 
+    this.logSecurityEvent("log", "auth.google.success", {
+      userId: user.id,
+      email: this.maskEmail(user.email),
+    });
     return this.createAuthResponse(user, "Google authentication successful");
   }
 
@@ -210,6 +257,9 @@ export class AuthService {
 
       if (!isLegacyRefreshToken) {
         if (!payload.sid || !payload.jti || payload.type !== "refresh") {
+          this.logSecurityEvent("warn", "auth.refresh.invalid_claims", {
+            sessionId: payload.sid ?? null,
+          });
           throw new UnauthorizedException("Invalid refresh token");
         }
 
@@ -217,6 +267,10 @@ export class AuthService {
       }
 
       if (user.deletedAt) {
+        this.logSecurityEvent("log", "auth.refresh.restore_deleted_user", {
+          userId: user.id,
+          sessionId: payload.sid ?? "legacy-session",
+        });
         return this.createAuthResponse(
           await this.restoreDeletedUser(user.id),
           "Session renewed successfully",
@@ -229,6 +283,10 @@ export class AuthService {
         );
       }
 
+      this.logSecurityEvent("log", "auth.refresh.success", {
+        userId: user.id,
+        sessionId: payload.sid ?? "legacy-session",
+      });
       return this.createAuthResponse(
         user,
         "Session renewed successfully",
@@ -241,8 +299,14 @@ export class AuthService {
       );
     } catch (error) {
       if (error instanceof UnauthorizedException) {
+        this.logSecurityEvent("warn", "auth.refresh.rejected", {
+          reason: error.message,
+        });
         throw error;
       }
+      this.logSecurityEvent("warn", "auth.refresh.invalid_token", {
+        reason: error instanceof Error ? error.message : "unknown",
+      });
       throw new UnauthorizedException("Invalid refresh token");
     }
   }
@@ -250,11 +314,52 @@ export class AuthService {
   async logout(user: CurrentUserType) {
     if (user.sessionId) {
       await this.revokeSession(user.id, user.sessionId);
+      this.logSecurityEvent("log", "auth.logout.success", {
+        userId: user.id,
+        sessionId: user.sessionId,
+      });
+    } else {
+      this.logSecurityEvent("warn", "auth.logout.no_session", {
+        userId: user.id,
+      });
     }
 
     return {
       message: "Session revoked successfully",
     };
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async cleanupExpiredAuthSessions() {
+    const retentionMs = this.getAuthSessionRetentionMs();
+    const refreshExpirationMs = this.getRefreshExpirationMs();
+    const now = Date.now();
+    const revokedSessionCutoff = new Date(now - retentionMs);
+    const staleSessionCutoff = new Date(now - retentionMs - refreshExpirationMs);
+
+    const deleted = await this.prisma.authSession.deleteMany({
+      where: {
+        OR: [
+          {
+            revokedAt: {
+              lt: revokedSessionCutoff,
+            },
+          },
+          {
+            revokedAt: null,
+            updatedAt: {
+              lt: staleSessionCutoff,
+            },
+          },
+        ],
+      },
+    });
+
+    if (deleted.count > 0) {
+      this.logSecurityEvent("log", "auth.session.cleanup", {
+        deletedCount: deleted.count,
+      });
+    }
   }
 
   private buildAccountState(user: {
@@ -426,6 +531,10 @@ export class AuthService {
     });
 
     if (!session) {
+      this.logSecurityEvent("warn", "auth.session.invalid", {
+        userId,
+        sessionId,
+      });
       throw new UnauthorizedException("Invalid refresh token");
     }
   }
@@ -453,6 +562,82 @@ export class AuthService {
         revokedAt: new Date(),
       },
     });
+  }
+
+  private getAuthSessionRetentionMs() {
+    const rawValue = this.configService.get<string>(
+      "AUTH_SESSION_RETENTION_DAYS",
+      `${DEFAULT_AUTH_SESSION_RETENTION_DAYS}`,
+    );
+    const parsed = Number.parseInt(rawValue, 10);
+    const safeDays =
+      Number.isFinite(parsed) && parsed > 0
+        ? parsed
+        : DEFAULT_AUTH_SESSION_RETENTION_DAYS;
+    return safeDays * 24 * 60 * 60 * 1000;
+  }
+
+  private getRefreshExpirationMs() {
+    const rawValue = this.configService.get<string>(
+      "JWT_REFRESH_EXPIRATION",
+      "7d",
+    );
+    return this.parseDurationToMs(rawValue) ?? DEFAULT_REFRESH_EXPIRATION_MS;
+  }
+
+  private parseDurationToMs(rawValue: string): number | null {
+    const normalized = rawValue.trim().toLowerCase();
+    const match = normalized.match(/^(\d+)(ms|s|m|h|d)$/);
+    if (!match) {
+      return null;
+    }
+
+    const value = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(value) || value <= 0) {
+      return null;
+    }
+
+    const unit = match[2];
+    const multipliers: Record<string, number> = {
+      ms: 1,
+      s: 1000,
+      m: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    };
+
+    return value * multipliers[unit];
+  }
+
+  private logSecurityEvent(
+    level: "log" | "warn",
+    event: string,
+    details: Record<string, unknown>,
+  ) {
+    const serializedDetails = Object.entries(details)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(" ");
+
+    const message = serializedDetails
+      ? `[security] ${event} ${serializedDetails}`
+      : `[security] ${event}`;
+
+    this.logger[level](message);
+  }
+
+  private maskEmail(email?: string | null) {
+    if (!email) {
+      return "unknown";
+    }
+
+    const [localPart, domain = ""] = email.split("@");
+    const trimmedLocalPart = localPart.trim();
+    if (trimmedLocalPart.length <= 2) {
+      return `${trimmedLocalPart[0] ?? "*"}***@${domain}`;
+    }
+
+    return `${trimmedLocalPart.slice(0, 2)}***@${domain}`;
   }
 
   private async verifyGoogleToken(firebaseIdToken: string) {

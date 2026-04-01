@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
@@ -47,6 +48,8 @@ interface UserBudgetSnapshot {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
@@ -182,6 +185,9 @@ export class UsersService {
     }
 
     await this.revokeUserSessions(userId);
+    this.logger.log(
+      `[security] users.disable revokeSessions targetUserId=${userId} actorUserId=${currentUser.id}`,
+    );
 
     return this.prisma.user.update({
       where: { id: userId },
@@ -260,6 +266,9 @@ export class UsersService {
 
     if (shouldRevokeSessions) {
       await this.revokeUserSessions(userId);
+      this.logger.log(
+        `[security] users.update revokeSessions targetUserId=${userId} actorUserId=${currentUser.id} passwordChanged=${hashedPassword !== undefined} deactivated=${dto.isActive === false}`,
+      );
     }
 
     const user = await this.prisma.user.update({
