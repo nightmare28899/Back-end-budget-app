@@ -2,11 +2,16 @@
 
 This file is the daily operational checklist for the production backend.
 
+Important:
+
+- Do not commit real server IPs, SSH usernames, database credentials, or local machine paths to this file.
+- Replace placeholder values below with environment-specific values at execution time.
+
 ## Scope
 
-- Server project path: `/root/Back-end-budget-app`
-- Public domain: `kevinlg.cloud`
-- API docs endpoint: `https://kevinlg.cloud/api/docs`
+- Server project path: `<SERVER_PROJECT_PATH>`
+- Public domain: `<API_DOMAIN>`
+- API docs endpoint: `https://<API_DOMAIN>/api/docs`
 - Main services (Docker Compose): `api`, `postgres`, `minio`
 
 ## 1) Update and deploy
@@ -14,7 +19,7 @@ This file is the daily operational checklist for the production backend.
 Run on the server:
 
 ```bash
-cd /root/Back-end-budget-app
+cd <SERVER_PROJECT_PATH>
 git pull origin main
 docker compose -f docker-compose.yml up -d --build
 docker compose -f docker-compose.yml ps
@@ -28,7 +33,7 @@ Expected result:
 ## 2) Verify API health
 
 ```bash
-curl -kI https://kevinlg.cloud/api/docs
+curl -kI https://<API_DOMAIN>/api/docs
 docker compose -f docker-compose.yml logs --tail=80 api
 ```
 
@@ -77,24 +82,22 @@ docker compose -f docker-compose.yml logs --tail=80 api
 ## 6) Domain/DNS checks
 
 ```bash
-dig +short kevinlg.cloud
-dig +short www.kevinlg.cloud
+dig +short <API_DOMAIN>
+dig +short <OPTIONAL_WWW_DOMAIN>
 ```
-
-Expected IP (current target): `187.124.76.128`
 
 ## 7) Prisma Studio from Mac (via SSH tunnel)
 
 Terminal A (create tunnel):
 
 ```bash
-ssh -N -L 6543:<POSTGRES_CONTAINER_IP>:5432 root@187.124.76.128
+ssh -N -L 6543:<POSTGRES_CONTAINER_IP>:5432 <SERVER_USER>@<SERVER_HOST>
 ```
 
 If you need the container IP first, run on server:
 
 ```bash
-cd /root/Back-end-budget-app
+cd <SERVER_PROJECT_PATH>
 docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
   "$(docker compose -f docker-compose.yml ps -q postgres)"
 ```
@@ -102,8 +105,8 @@ docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
 Terminal B (run Prisma Studio locally):
 
 ```bash
-cd /Users/nightmare28899/Documents/projects/personal/budgetApp/Back-end-budget-app
-export DATABASE_URL='postgresql://budget_user:budget_pass_change_me@127.0.0.1:6543/budget_app?schema=public'
+cd <LOCAL_BACKEND_PROJECT_PATH>
+export DATABASE_URL='postgresql://<DB_USER>:<DB_PASSWORD>@127.0.0.1:6543/<DB_NAME>?schema=public'
 npx prisma studio --port 5560 --url="$DATABASE_URL"
 ```
 

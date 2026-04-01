@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { ValidationPipe } from "@nestjs/common";
+import { Logger, ValidationPipe } from "@nestjs/common";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
@@ -43,6 +43,7 @@ async function bootstrap() {
   assertStrongProductionSecrets();
 
   const app = await NestFactory.create(AppModule);
+  const logger = new Logger("Bootstrap");
   const globalPrefix = "api";
   const isProduction = process.env.NODE_ENV === "production";
   app.setGlobalPrefix(globalPrefix);
@@ -91,24 +92,34 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const basicAuthMiddleware = basicAuth({
-    challenge: true,
-    users: {
-      [process.env.SWAGGER_USERNAME || "admin"]:
-        process.env.SWAGGER_PASSWORD || "admin",
-    },
-  });
-  app.use("/api/docs", basicAuthMiddleware);
-  app.use("/api/docs-json", basicAuthMiddleware);
+  const swaggerUsername = process.env.SWAGGER_USERNAME?.trim();
+  const swaggerPassword = process.env.SWAGGER_PASSWORD?.trim();
+  const enableSwagger =
+    !isProduction || Boolean(swaggerUsername && swaggerPassword);
 
-  const config = new DocumentBuilder()
-    .setTitle("BudgetApp API")
-    .setDescription("Personal finance and expense tracking API")
-    .setVersion("1.0")
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
+  if (enableSwagger) {
+    const basicAuthMiddleware = basicAuth({
+      challenge: true,
+      users: {
+        [swaggerUsername || "admin"]: swaggerPassword || "admin",
+      },
+    });
+    app.use("/api/docs", basicAuthMiddleware);
+    app.use("/api/docs-json", basicAuthMiddleware);
+
+    const config = new DocumentBuilder()
+      .setTitle("BudgetApp API")
+      .setDescription("Personal finance and expense tracking API")
+      .setVersion("1.0")
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("docs", app, document, { useGlobalPrefix: true });
+  } else {
+    logger.warn(
+      "Swagger docs are disabled in production because SWAGGER_USERNAME and SWAGGER_PASSWORD are not set.",
+    );
+  }
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
