@@ -1,12 +1,14 @@
 import {
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleInit,
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import * as Minio from "minio";
 import { randomUUID } from "node:crypto";
+import type { Readable } from "node:stream";
 
 const DEFAULT_MINIO_OPERATION_TIMEOUT_MS = 5000;
 
@@ -15,6 +17,7 @@ export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
   private minioClient: Minio.Client;
   private bucket: string;
+  private readonly fallbackBuckets: string[];
   private readonly minioOperationTimeoutMs: number;
   private readonly minioConfig: {
     endPoint: string;
@@ -76,6 +79,7 @@ export class StorageService implements OnModuleInit {
     };
     this.minioOperationTimeoutMs = timeout;
     this.bucket = this.configService.get<string>("MINIO_BUCKET", "receipts");
+    this.fallbackBuckets = this.resolveFallbackBuckets(this.bucket);
     this.minioClient = new Minio.Client({
       endPoint: this.minioConfig.endPoint,
       port: this.minioConfig.port,
@@ -115,16 +119,38 @@ export class StorageService implements OnModuleInit {
     folder = "receipts",
   ): Promise<string> {
     const ext = file.originalname.split(".").pop();
-    const objectName = `${folder}/${randomUUID()}.${ext}`;
+
+    return this.uploadBuffer(file.buffer, {
+      folder,
+      mimeType: file.mimetype,
+      extension: ext,
+      size: file.size,
+    });
+  }
+
+  async uploadBuffer(
+    buffer: Buffer,
+    options?: {
+      folder?: string;
+      mimeType?: string;
+      extension?: string | null;
+      size?: number;
+    },
+  ): Promise<string> {
+    const folder = this.normalizeFolder(options?.folder);
+    const extension = this.normalizeExtension(options?.extension);
+    const objectName = `${folder}/${randomUUID()}${extension ? `.${extension}` : ""}`;
+    const size = options?.size ?? buffer.byteLength;
+    const mimeType = options?.mimeType?.trim() || "application/octet-stream";
 
     try {
       await this.withTimeout("putObject", () =>
         this.minioClient.putObject(
           this.bucket,
           objectName,
-          file.buffer,
-          file.size,
-          { "Content-Type": file.mimetype },
+          buffer,
+          size,
+          { "Content-Type": mimeType },
         ),
       );
     } catch (error) {
@@ -143,8 +169,9 @@ export class StorageService implements OnModuleInit {
 
   async getFileUrl(objectName: string): Promise<string> {
     try {
+      const { bucket } = await this.findBucketForObject(objectName);
       return await this.withTimeout("presignedGetObject", () =>
-        this.minioClient.presignedGetObject(this.bucket, objectName, 3600),
+        this.minioClient.presignedGetObject(bucket, objectName, 3600),
       );
     } catch (error) {
       this.logger.error(
@@ -158,10 +185,48 @@ export class StorageService implements OnModuleInit {
     }
   }
 
+  async getFileStream(objectName: string): Promise<{
+    stream: Readable;
+    contentType: string | null;
+    contentLength: number | null;
+  }> {
+    try {
+      const { bucket, stat } = await this.findBucketForObject(objectName);
+      const [stream] = await Promise.all([
+        this.withTimeout("getObject", () =>
+          this.minioClient.getObject(bucket, objectName),
+        ),
+      ]);
+
+      return {
+        stream,
+        contentType:
+          typeof stat.metaData?.["content-type"] === "string"
+            ? stat.metaData["content-type"]
+            : null,
+        contentLength: typeof stat.size === "number" ? stat.size : null,
+      };
+    } catch (error) {
+      if (this.isObjectNotFound(error)) {
+        throw new NotFoundException("File not found");
+      }
+
+      this.logger.error(
+        `MinIO read failed (${this.describeMinioTarget()}, object="${objectName}"): ${this.formatStorageError(
+          error,
+        )}`,
+      );
+      throw new ServiceUnavailableException(
+        "File storage service is unavailable. Please try again later.",
+      );
+    }
+  }
+
   async deleteFile(objectName: string): Promise<void> {
     try {
+      const { bucket } = await this.findBucketForObject(objectName);
       await this.withTimeout("removeObject", () =>
-        this.minioClient.removeObject(this.bucket, objectName),
+        this.minioClient.removeObject(bucket, objectName),
       );
     } catch (error) {
       this.logger.error(
@@ -181,6 +246,79 @@ export class StorageService implements OnModuleInit {
       ? `, region=${this.minioConfig.region}`
       : "";
     return `${protocol}://${this.minioConfig.endPoint}:${this.minioConfig.port} (bucket=${this.bucket}${region})`;
+  }
+
+  private resolveFallbackBuckets(primaryBucket: string): string[] {
+    const configured = this.configService
+      .get<string>("MINIO_FALLBACK_BUCKETS", "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const commonLegacyBuckets = ["receipts", "app-uploads"];
+
+    return Array.from(
+      new Set(
+        [...configured, ...commonLegacyBuckets].filter(
+          (bucket) => bucket !== primaryBucket,
+        ),
+      ),
+    );
+  }
+
+  private async findBucketForObject(objectName: string): Promise<{
+    bucket: string;
+    stat: Minio.BucketItemStat;
+  }> {
+    const candidateBuckets = [this.bucket, ...this.fallbackBuckets];
+
+    for (const bucket of candidateBuckets) {
+      try {
+        const stat = await this.withTimeout("statObject", () =>
+          this.minioClient.statObject(bucket, objectName),
+        );
+        return { bucket, stat };
+      } catch (error) {
+        if (this.isObjectNotFound(error)) {
+          continue;
+        }
+
+        if (bucket !== this.bucket) {
+          this.logger.warn(
+            `MinIO fallback bucket lookup failed (${bucket}, object="${objectName}"): ${this.formatStorageError(
+              error,
+            )}`,
+          );
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new NotFoundException("File not found");
+  }
+
+  private isObjectNotFound(error: unknown): boolean {
+    const storageError = error as Error & {
+      code?: string;
+      statusCode?: number;
+    };
+
+    return (
+      storageError?.code === "NoSuchKey" ||
+      storageError?.code === "NotFound" ||
+      storageError?.statusCode === 404
+    );
+  }
+
+  private normalizeFolder(folder?: string): string {
+    const normalized = folder?.trim().replace(/^\/+|\/+$/g, "");
+    return normalized || "receipts";
+  }
+
+  private normalizeExtension(extension?: string | null): string | null {
+    const normalized = extension?.trim().replace(/^\.+/, "").toLowerCase();
+    return normalized || null;
   }
 
   private formatStorageError(error: unknown): string {

@@ -321,13 +321,20 @@ export class UsersService {
       return { ...user, avatarKey: null };
     }
 
-    try {
-      const presigned = await this.storageService.getFileUrl(avatarKey);
-      return { ...user, avatarUrl: presigned, avatarKey };
-    } catch (error) {
-      console.error("Failed to generate presigned URL for avatar:", error);
-      return { ...user, avatarKey };
+    return {
+      ...user,
+      avatarUrl: this.buildAvatarProxyUrl(avatarKey),
+      avatarKey,
+    };
+  }
+
+  private buildAvatarProxyUrl(avatarKey: string): string {
+    const filename = avatarKey.replace(/^avatars\//, "").trim();
+    if (!filename) {
+      return avatarKey;
     }
+
+    return `/api/storage/avatars/${encodeURIComponent(filename)}`;
   }
 
   private resolveBudgetForCreate(dto: CreateUserDto) {

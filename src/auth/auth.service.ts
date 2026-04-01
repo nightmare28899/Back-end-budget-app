@@ -1,6 +1,7 @@
 import {
   Injectable,
   ConflictException,
+  Logger,
   UnauthorizedException,
   ServiceUnavailableException,
 } from "@nestjs/common";
@@ -39,6 +40,8 @@ const LOGIN_USER_SELECT = {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -122,6 +125,7 @@ export class AuthService {
     if (!email || decodedToken.email_verified !== true) {
       throw new UnauthorizedException("Google account email is not verified");
     }
+    const googleAvatarUrl = this.resolveGoogleAvatarUrl(decodedToken.picture);
 
     let user = await this.prisma.user.findUnique({
       where: { email },
@@ -131,6 +135,7 @@ export class AuthService {
     if (!user) {
       const generatedPassword = randomBytes(32).toString("hex");
       const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+      const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
 
       user = await this.prisma.user.create({
         data: {
@@ -138,13 +143,22 @@ export class AuthService {
           name: this.resolveGoogleDisplayName(decodedToken.name, email),
           password: hashedPassword,
           role: "user",
-          avatarUrl: null,
+          avatarUrl,
           isActive: true,
           isPremium: false,
           deletedAt: null,
         },
         select: AUTH_USER_SELECT,
       });
+    } else if (!user.avatarUrl && googleAvatarUrl) {
+      const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
+      if (avatarUrl) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { avatarUrl },
+          select: AUTH_USER_SELECT,
+        });
+      }
     }
 
     if (!user.isActive) {
@@ -310,6 +324,93 @@ export class AuthService {
     return email.split("@")[0].slice(0, 100);
   }
 
+  private resolveGoogleAvatarUrl(picture: unknown): string | null {
+    if (typeof picture !== "string") {
+      return null;
+    }
+
+    const normalized = picture.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  private async importGoogleAvatar(
+    pictureUrl: string | null,
+    email: string,
+  ): Promise<string | null> {
+    if (!pictureUrl) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(pictureUrl);
+      if (!response.ok) {
+        this.logger.warn(
+          `Skipping Google avatar import for ${email}: upstream returned ${response.status}`,
+        );
+        return null;
+      }
+
+      const contentType = response.headers.get("content-type")?.trim() || "";
+      if (!contentType.toLowerCase().startsWith("image/")) {
+        this.logger.warn(
+          `Skipping Google avatar import for ${email}: unsupported content-type "${contentType || "unknown"}"`,
+        );
+        return null;
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.byteLength === 0) {
+        this.logger.warn(
+          `Skipping Google avatar import for ${email}: empty response body`,
+        );
+        return null;
+      }
+
+      return await this.storageService.uploadBuffer(buffer, {
+        folder: "avatars",
+        mimeType: contentType,
+        extension: this.resolveImageExtension(contentType, pictureUrl),
+        size: buffer.byteLength,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Google avatar import failed for ${email}: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+      return null;
+    }
+  }
+
+  private resolveImageExtension(
+    contentType: string,
+    pictureUrl: string,
+  ): string | null {
+    const mimeType = contentType.toLowerCase();
+    if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
+      return "jpg";
+    }
+    if (mimeType.includes("png")) {
+      return "png";
+    }
+    if (mimeType.includes("webp")) {
+      return "webp";
+    }
+    if (mimeType.includes("gif")) {
+      return "gif";
+    }
+
+    try {
+      const pathname = new URL(pictureUrl).pathname;
+      const rawExtension = pathname.split(".").pop()?.trim().toLowerCase();
+      return rawExtension || null;
+    } catch {
+      return null;
+    }
+  }
+
   private async withAvatarPresignedUrl<T extends { avatarUrl: string | null }>(
     user: T,
   ): Promise<T> {
@@ -317,11 +418,15 @@ export class AuthService {
       return user;
     }
 
-    try {
-      const presigned = await this.storageService.getFileUrl(user.avatarUrl);
-      return { ...user, avatarUrl: presigned };
-    } catch {
-      return user;
+    return { ...user, avatarUrl: this.buildAvatarProxyUrl(user.avatarUrl) };
+  }
+
+  private buildAvatarProxyUrl(avatarKey: string): string {
+    const filename = avatarKey.replace(/^avatars\//, "").trim();
+    if (!filename) {
+      return avatarKey;
     }
+
+    return `/api/storage/avatars/${encodeURIComponent(filename)}`;
   }
 }
