@@ -29,6 +29,11 @@ enum SavingsTransactionType {
   WITHDRAW
 }
 
+enum DevicePlatform {
+  ANDROID
+  IOS
+}
+
 model User {
   id          String     @id @default(uuid())
   email       String     @unique
@@ -52,6 +57,7 @@ model User {
   expenses      Expense[]
   subscriptions Subscription[]
   savingsGoals  SavingsGoal[]
+  deviceTokens  DeviceToken[]
 
   @@map("users")
 }
@@ -133,13 +139,14 @@ model Expense {
 model Subscription {
   id              String       @id @default(uuid())
   name            String
-  cost            Decimal      @db.Decimal(10, 2)
+  cost            Decimal       @db.Decimal(10, 2)
   paymentMethod   PaymentMethod @default(CREDIT_CARD)
   creditCardId    String?
   currency        String       @default("MXN")
   billingCycle    BillingCycle @default(MONTHLY)
   nextPaymentDate DateTime
   reminderDays    Int          @default(3)
+  lastReminderSentFor DateTime?
   isActive        Boolean      @default(true)
   logoUrl         String?
   hexColor        String?
@@ -154,6 +161,20 @@ model Subscription {
   @@index([userId, isActive])
   @@index([creditCardId])
   @@map("subscriptions")
+}
+
+model DeviceToken {
+  id         String         @id @default(uuid())
+  token      String         @unique
+  platform   DevicePlatform
+  userId     String
+  lastSeenAt DateTime       @default(now())
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_tokens")
 }
 
 model SavingsGoal {

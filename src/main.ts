@@ -5,6 +5,7 @@ import { json, urlencoded } from "express";
 import helmet from "helmet";
 import basicAuth from "express-basic-auth";
 import { AppModule } from "./app.module";
+import { GlobalExceptionFilter } from "./common/filters/global-exception.filter";
 
 const WEAK_SECRET_VALUES = new Set([
   "changeme",
@@ -68,6 +69,7 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   const corsOrigin = process.env.CORS_ORIGIN;
   const allowedOrigins = corsOrigin

@@ -17,7 +17,7 @@ import {
 } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
-import { RegisterDto, LoginDto, RefreshTokenDto } from "./dto";
+import { RegisterDto, LoginDto, RefreshTokenDto, GoogleAuthDto } from "./dto";
 import { buildImageUploadOptions } from "../common/upload/image-upload.config";
 
 @ApiTags("Auth")
@@ -60,6 +60,17 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post("google")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Login or register with Google via Firebase" })
+  @ApiResponse({ status: 200, description: "Google authentication successful" })
+  @ApiResponse({ status: 401, description: "Invalid Google credentials" })
+  @ApiResponse({ status: 503, description: "Google authentication is not configured" })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async google(@Body() dto: GoogleAuthDto) {
+    return this.authService.loginWithGoogle(dto);
   }
 
   @Post("refresh")

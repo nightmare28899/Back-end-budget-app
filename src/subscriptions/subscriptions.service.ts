@@ -10,6 +10,10 @@ import { UpdateSubscriptionDto } from "./dto/update-subscription.dto";
 import { CreditCardsService } from "../credit-cards/credit-cards.service";
 import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
 import { normalizePaymentMethod } from "../common/payments/payment-method.utils";
+import {
+  SubscriptionReminderCandidate,
+  SubscriptionsWorkerService,
+} from "./subscriptions.worker.service";
 
 export interface ProjectionCurrencyItem {
   currency: string;
@@ -55,9 +59,11 @@ export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly creditCardsService: CreditCardsService,
+    private readonly subscriptionsWorkerService: SubscriptionsWorkerService,
   ) {}
 
   async create(userId: string, dto: CreateSubscriptionDto) {
+    const now = new Date();
     const nextPaymentDate = this.parseDate(dto.nextPaymentDate);
     this.assertFutureDate(nextPaymentDate);
     const paymentMethod =
@@ -70,7 +76,7 @@ export class SubscriptionsService {
       },
     );
 
-    return this.prisma.subscription.create({
+    const subscription = await this.prisma.subscription.create({
       data: {
         userId,
         name: dto.name,
@@ -89,6 +95,10 @@ export class SubscriptionsService {
         creditCard: { select: creditCardPublicSelect },
       },
     });
+
+    await this.sendImmediateSameDayReminderIfNeeded(subscription, now);
+
+    return subscription;
   }
 
   async findAll(userId: string) {
@@ -315,5 +325,48 @@ export class SubscriptionsService {
         (dueDay.getTime() - startOfToday.getTime()) / (24 * 60 * 60 * 1000),
       ),
     );
+  }
+
+  private async sendImmediateSameDayReminderIfNeeded(
+    subscription: SubscriptionReminderCandidate & { isActive?: boolean },
+    now: Date,
+  ) {
+    if (!subscription.isActive) {
+      return;
+    }
+
+    if (!this.isSameDay(subscription.nextPaymentDate, now)) {
+      return;
+    }
+
+    if (!this.isPastReminderWindow(now)) {
+      return;
+    }
+
+    await this.subscriptionsWorkerService.sendReminderForSubscription(
+      {
+        id: subscription.id,
+        userId: subscription.userId,
+        name: subscription.name,
+        cost: subscription.cost,
+        currency: subscription.currency,
+        nextPaymentDate: subscription.nextPaymentDate,
+        reminderDays: subscription.reminderDays,
+        lastReminderSentFor: subscription.lastReminderSentFor ?? null,
+      },
+      now,
+    );
+  }
+
+  private isSameDay(left: Date, right: Date) {
+    return (
+      left.getFullYear() === right.getFullYear() &&
+      left.getMonth() === right.getMonth() &&
+      left.getDate() === right.getDate()
+    );
+  }
+
+  private isPastReminderWindow(now: Date) {
+    return now.getHours() >= 9;
   }
 }
