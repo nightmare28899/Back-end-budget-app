@@ -4,6 +4,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
 import basicAuth from "express-basic-auth";
+import { randomBytes } from "node:crypto";
 import { AppModule } from "./app.module";
 import { GlobalExceptionFilter } from "./common/filters/global-exception.filter";
 
@@ -98,10 +99,20 @@ async function bootstrap() {
     !isProduction || Boolean(swaggerUsername && swaggerPassword);
 
   if (enableSwagger) {
+    const resolvedSwaggerUsername = swaggerUsername || "dev";
+    const resolvedSwaggerPassword =
+      swaggerPassword || randomBytes(12).toString("hex");
+
+    if (!swaggerUsername || !swaggerPassword) {
+      logger.warn(
+        `Swagger docs are enabled with generated non-production credentials: ${resolvedSwaggerUsername} / ${resolvedSwaggerPassword}`,
+      );
+    }
+
     const basicAuthMiddleware = basicAuth({
       challenge: true,
       users: {
-        [swaggerUsername || "admin"]: swaggerPassword || "admin",
+        [resolvedSwaggerUsername]: resolvedSwaggerPassword,
       },
     });
     app.use("/api/docs", basicAuthMiddleware);

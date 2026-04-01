@@ -181,6 +181,8 @@ export class UsersService {
       return existingUser;
     }
 
+    await this.revokeUserSessions(userId);
+
     return this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -253,6 +255,13 @@ export class UsersService {
       ? await bcrypt.hash(dto.password, 10)
       : undefined;
 
+    const shouldRevokeSessions =
+      hashedPassword !== undefined || dto.isActive === false;
+
+    if (shouldRevokeSessions) {
+      await this.revokeUserSessions(userId);
+    }
+
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -302,15 +311,27 @@ export class UsersService {
     throw new ForbiddenException("You can only manage your own account");
   }
 
-  private async withAvatarPresignedUrls<T extends { avatarUrl: string | null }>(
-    users: T[],
-  ) {
-    return Promise.all(users.map((user) => this.withAvatarPresignedUrl(user)));
+  private async revokeUserSessions(userId: string) {
+    await this.prisma.authSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
   }
 
-  private async withAvatarPresignedUrl<T extends { avatarUrl: string | null }>(
+  private withAvatarPresignedUrls<T extends { avatarUrl: string | null }>(
+    users: T[],
+  ) {
+    return users.map((user) => this.withAvatarPresignedUrl(user));
+  }
+
+  private withAvatarPresignedUrl<T extends { avatarUrl: string | null }>(
     user: T | null,
-  ): Promise<(T & { avatarKey: string | null }) | null> {
+  ): (T & { avatarKey: string | null }) | null {
     if (!user) {
       return null;
     }

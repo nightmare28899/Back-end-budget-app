@@ -1,5 +1,6 @@
 export interface CurrentUserType {
   id: string;
+  sessionId?: string | null;
   email: string;
   name: string;
   role: string;

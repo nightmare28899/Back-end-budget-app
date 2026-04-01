@@ -7,6 +7,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 export interface JwtPayload {
   sub: string;
   email: string;
+  sid?: string;
 }
 
 @Injectable()
@@ -28,6 +29,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    if (payload.sid) {
+      const session = await this.prisma.authSession.findUnique({
+        where: { id: payload.sid },
+        select: {
+          id: true,
+          userId: true,
+          revokedAt: true,
+        },
+      });
+
+      if (
+        !session ||
+        session.userId !== payload.sub ||
+        session.revokedAt !== null
+      ) {
+        throw new UnauthorizedException("Session is no longer active");
+      }
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {
@@ -57,6 +77,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     return {
       id: user.id,
+      sessionId: payload.sid ?? null,
       email: user.email,
       name: user.name,
       role: user.role,

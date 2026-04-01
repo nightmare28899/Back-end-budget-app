@@ -4,6 +4,7 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  UseGuards,
   UseInterceptors,
   UploadedFile,
 } from "@nestjs/common";
@@ -19,6 +20,9 @@ import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { RegisterDto, LoginDto, RefreshTokenDto, GoogleAuthDto } from "./dto";
 import { buildImageUploadOptions } from "../common/upload/image-upload.config";
+import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { CurrentUser } from "../common/decorators/current-user.decorator";
+import type { CurrentUserType } from "../common/types/current-user.type";
 
 @ApiTags("Auth")
 @Controller("auth")
@@ -67,7 +71,10 @@ export class AuthController {
   @ApiOperation({ summary: "Login or register with Google via Firebase" })
   @ApiResponse({ status: 200, description: "Google authentication successful" })
   @ApiResponse({ status: 401, description: "Invalid Google credentials" })
-  @ApiResponse({ status: 503, description: "Google authentication is not configured" })
+  @ApiResponse({
+    status: 503,
+    description: "Google authentication is not configured",
+  })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async google(@Body() dto: GoogleAuthDto) {
     return this.authService.loginWithGoogle(dto);
@@ -81,5 +88,14 @@ export class AuthController {
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(@Body() dto: RefreshTokenDto) {
     return this.authService.refreshToken(dto.refreshToken);
+  }
+
+  @Post("logout")
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Revoke the current authenticated session" })
+  @ApiResponse({ status: 200, description: "Session revoked successfully" })
+  async logout(@CurrentUser() user: CurrentUserType) {
+    return this.authService.logout(user);
   }
 }

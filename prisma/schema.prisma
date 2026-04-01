@@ -58,8 +58,23 @@ model User {
   subscriptions Subscription[]
   savingsGoals  SavingsGoal[]
   deviceTokens  DeviceToken[]
+  authSessions  AuthSession[]
 
   @@map("users")
+}
+
+model AuthSession {
+  id                    String    @id @default(uuid())
+  userId                String
+  currentRefreshTokenId String    @map("current_refresh_token_id")
+  revokedAt             DateTime? @map("revoked_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([revokedAt])
+  @@map("auth_sessions")
 }
 
 model CreditCard {
