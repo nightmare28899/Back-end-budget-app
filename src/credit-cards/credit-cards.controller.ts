@@ -10,11 +10,7 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
@@ -46,6 +42,15 @@ export class CreditCardsController {
     @Query() query: QueryCreditCardsDto,
   ) {
     return this.creditCardsService.findAll(user.id, query);
+  }
+
+  @Get("overview")
+  @ApiOperation({ summary: "Get credit card usage and schedule overview" })
+  async getOverview(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: QueryCreditCardsDto,
+  ) {
+    return this.creditCardsService.getOverview(user.id, query);
   }
 
   @Get(":id")
