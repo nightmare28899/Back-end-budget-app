@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { BillingCycle, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -38,31 +38,31 @@ export type WeeklySummary = BudgetSummary;
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getDailyTotals(userId: string, days = 7) {
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - (days - 1));
-    startDate.setHours(0, 0, 0, 0);
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
+  async getDailyTotals(userId: string, days = 7, endDate?: string) {
+    const safeDays = Math.max(days, 1);
+    const windowEnd = this.getAnalyticsReferenceNow(endDate, "endDate");
+
+    const startDate = this.startOfDay(windowEnd);
+    startDate.setDate(startDate.getDate() - (safeDays - 1));
 
     const expenses = await this.prisma.expense.findMany({
       where: {
         userId,
-        date: { gte: startDate, lte: endOfToday },
+        date: { gte: startDate, lte: windowEnd },
       },
       select: { cost: true, date: true },
       orderBy: { date: "asc" },
     });
 
     const dailyMap = new Map<string, number>();
-    for (let i = 0; i < days; i++) {
+    for (let i = 0; i < safeDays; i++) {
       const d = new Date(startDate);
       d.setDate(d.getDate() + i);
-      dailyMap.set(d.toISOString().split("T")[0], 0);
+      dailyMap.set(formatDateOnly(d), 0);
     }
 
     for (const exp of expenses) {
-      const key = exp.date.toISOString().split("T")[0];
+      const key = formatDateOnly(exp.date);
       dailyMap.set(key, (dailyMap.get(key) ?? 0) + Number(exp.cost));
     }
 
@@ -76,6 +76,7 @@ export class AnalyticsService {
     userId: string,
     from?: string,
     to?: string,
+    referenceDate?: string,
   ): Promise<CategoryBreakdownItem[]> {
     const where: Prisma.ExpenseWhereInput = { userId };
     const now = new Date();
@@ -84,17 +85,41 @@ export class AnalyticsService {
       const dateFilter: Prisma.DateTimeFilter = {};
 
       if (from) {
-        dateFilter.gte = new Date(from);
+        dateFilter.gte = this.startOfDay(this.parseAnalyticsDate(from, "from"));
       }
       if (to) {
-        const toDate = new Date(to);
-        toDate.setHours(23, 59, 59, 999);
+        const toDate = this.endOfDay(this.parseAnalyticsDate(to, "to"));
         dateFilter.lte = toDate.getTime() <= now.getTime() ? toDate : now;
       } else {
         dateFilter.lte = now;
       }
 
       where.date = dateFilter;
+    } else if (referenceDate) {
+      const user = await this.getBudgetConfig(userId);
+      const analyticsNow = this.getAnalyticsReferenceNow(
+        referenceDate,
+        "referenceDate",
+      );
+      const budgetWindow = resolveBudgetWindow(
+        {
+          budgetAmount: user?.budgetAmount,
+          dailyBudget: user?.dailyBudget,
+          budgetPeriod: user?.budgetPeriod,
+          budgetPeriodStart: user?.budgetPeriodStart,
+          budgetPeriodEnd: user?.budgetPeriodEnd,
+        },
+        analyticsNow,
+      );
+      const scopedEnd =
+        budgetWindow.end.getTime() <= analyticsNow.getTime()
+          ? budgetWindow.end
+          : analyticsNow;
+
+      where.date = {
+        gte: budgetWindow.start,
+        lte: scopedEnd,
+      };
     } else {
       where.date = { lte: now };
     }
@@ -146,28 +171,30 @@ export class AnalyticsService {
       .sort((a, b) => b.total - a.total);
   }
 
-  async getBudgetSummary(userId: string): Promise<BudgetSummary> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        dailyBudget: true,
-        budgetAmount: true,
-        budgetPeriod: true,
-        budgetPeriodStart: true,
-        budgetPeriodEnd: true,
-      },
-    });
+  async getBudgetSummary(
+    userId: string,
+    referenceDate?: string,
+  ): Promise<BudgetSummary> {
+    const user = await this.getBudgetConfig(userId);
+    const analyticsNow = this.getAnalyticsReferenceNow(
+      referenceDate,
+      "referenceDate",
+    );
 
-    const budgetWindow = resolveBudgetWindow({
-      budgetAmount: user?.budgetAmount,
-      dailyBudget: user?.dailyBudget,
-      budgetPeriod: user?.budgetPeriod,
-      budgetPeriodStart: user?.budgetPeriodStart,
-      budgetPeriodEnd: user?.budgetPeriodEnd,
-    });
-    const now = new Date();
+    const budgetWindow = resolveBudgetWindow(
+      {
+        budgetAmount: user?.budgetAmount,
+        dailyBudget: user?.dailyBudget,
+        budgetPeriod: user?.budgetPeriod,
+        budgetPeriodStart: user?.budgetPeriodStart,
+        budgetPeriodEnd: user?.budgetPeriodEnd,
+      },
+      analyticsNow,
+    );
     const expenseWindowEnd =
-      budgetWindow.end.getTime() <= now.getTime() ? budgetWindow.end : now;
+      budgetWindow.end.getTime() <= analyticsNow.getTime()
+        ? budgetWindow.end
+        : analyticsNow;
 
     const expenses = await this.prisma.expense.findMany({
       where: {
@@ -184,7 +211,7 @@ export class AnalyticsService {
       userId,
       budgetWindow.start,
       budgetWindow.end,
-      new Date(),
+      analyticsNow,
     );
     const safeToSpend = budgetAmount - totalSpent - reservedSubscriptions;
 
@@ -208,8 +235,11 @@ export class AnalyticsService {
     };
   }
 
-  async getWeeklySummary(userId: string): Promise<WeeklySummary> {
-    return this.getBudgetSummary(userId);
+  async getWeeklySummary(
+    userId: string,
+    referenceDate?: string,
+  ): Promise<WeeklySummary> {
+    return this.getBudgetSummary(userId, referenceDate);
   }
 
   private async getReservedSubscriptionsTotal(
@@ -292,6 +322,65 @@ export class AnalyticsService {
         break;
     }
 
+    return next;
+  }
+
+  private async getBudgetConfig(userId: string) {
+    return this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        dailyBudget: true,
+        budgetAmount: true,
+        budgetPeriod: true,
+        budgetPeriodStart: true,
+        budgetPeriodEnd: true,
+      },
+    });
+  }
+
+  private getAnalyticsReferenceNow(raw?: string, fieldName = "referenceDate") {
+    const now = new Date();
+    if (!raw) {
+      return now;
+    }
+
+    const parsed = this.parseAnalyticsDate(raw, fieldName);
+    if (this.startOfDay(parsed).getTime() > this.startOfDay(now).getTime()) {
+      throw new BadRequestException(
+        `${fieldName} cannot be greater than the current date`,
+      );
+    }
+
+    const endOfSelectedDay = this.endOfDay(parsed);
+    return endOfSelectedDay.getTime() <= now.getTime() ? endOfSelectedDay : now;
+  }
+
+  private parseAnalyticsDate(raw: string, fieldName: string) {
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) {
+      const year = Number(match[1]);
+      const month = Number(match[2]) - 1;
+      const day = Number(match[3]);
+      return new Date(year, month, day, 12, 0, 0, 0);
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`${fieldName} is invalid`);
+    }
+
+    return parsed;
+  }
+
+  private startOfDay(date: Date) {
+    const next = new Date(date);
+    next.setHours(0, 0, 0, 0);
+    return next;
+  }
+
+  private endOfDay(date: Date) {
+    const next = new Date(date);
+    next.setHours(23, 59, 59, 999);
     return next;
   }
 }

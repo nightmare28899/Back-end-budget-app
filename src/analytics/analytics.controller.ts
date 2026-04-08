@@ -10,6 +10,8 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import { DailyTotalsQueryDto } from "./dto/daily-totals-query.dto";
+import { AnalyticsSummaryQueryDto } from "./dto/analytics-summary-query.dto";
+import { CategoryBreakdownQueryDto } from "./dto/category-breakdown-query.dto";
 
 @ApiTags("Analytics")
 @ApiBearerAuth()
@@ -19,40 +21,61 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("daily")
-  @ApiOperation({ summary: "Get daily spending totals for the last N days" })
+  @ApiOperation({
+    summary:
+      "Get daily spending totals for the last N days up to a selected date",
+  })
   @ApiQuery({ name: "days", required: false, type: Number })
+  @ApiQuery({ name: "endDate", required: false, type: String })
   async getDailyTotals(
     @CurrentUser() user: CurrentUserType,
     @Query() query: DailyTotalsQueryDto,
   ) {
-    return this.analyticsService.getDailyTotals(user.id, query.days ?? 7);
+    return this.analyticsService.getDailyTotals(
+      user.id,
+      query.days ?? 7,
+      query.endDate,
+    );
   }
 
   @Get("categories")
   @ApiOperation({ summary: "Get spending breakdown by category" })
   @ApiQuery({ name: "from", required: false })
   @ApiQuery({ name: "to", required: false })
+  @ApiQuery({ name: "referenceDate", required: false, type: String })
   async getCategoryBreakdown(
     @CurrentUser() user: CurrentUserType,
-    @Query("from") from?: string,
-    @Query("to") to?: string,
+    @Query() query: CategoryBreakdownQueryDto,
   ) {
-    return this.analyticsService.getCategoryBreakdown(user.id, from, to);
+    return this.analyticsService.getCategoryBreakdown(
+      user.id,
+      query.from,
+      query.to,
+      query.referenceDate,
+    );
   }
 
   @Get("weekly-summary")
   @ApiOperation({
     summary: "Get summary for the currently configured budget period",
   })
-  async getWeeklySummary(@CurrentUser() user: CurrentUserType) {
-    return this.analyticsService.getWeeklySummary(user.id);
+  @ApiQuery({ name: "referenceDate", required: false, type: String })
+  async getWeeklySummary(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: AnalyticsSummaryQueryDto,
+  ) {
+    return this.analyticsService.getWeeklySummary(user.id, query.referenceDate);
   }
 
   @Get("budget-summary")
   @ApiOperation({
     summary: "Get summary for the currently configured budget period",
   })
-  async getBudgetSummary(@CurrentUser() user: CurrentUserType) {
-    return this.analyticsService.getBudgetSummary(user.id);
+  @ApiQuery({ name: "referenceDate", required: false, type: String })
+  async getBudgetSummary(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: AnalyticsSummaryQueryDto,
+  ) {
+    return this.analyticsService.getBudgetSummary(user.id, query.referenceDate);
   }
 }

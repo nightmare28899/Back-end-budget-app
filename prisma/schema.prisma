@@ -51,6 +51,8 @@ model User {
   updatedAt   DateTime   @updatedAt
   isActive    Boolean    @default(true)
   isPremium   Boolean    @default(false)
+  termsAcceptedAt DateTime? @map("terms_accepted_at")
+  termsVersion String?   @map("terms_version")
   deletedAt   DateTime?  @map("deleted_at")
   categories    Category[]
   creditCards   CreditCard[]

@@ -32,6 +32,8 @@ const AUTH_USER_SELECT = {
   currency: true,
   isActive: true,
   isPremium: true,
+  termsAcceptedAt: true,
+  termsVersion: true,
   deletedAt: true,
 } as const;
 
@@ -52,6 +54,7 @@ interface AuthResponseOptions {
 
 const DEFAULT_AUTH_SESSION_RETENTION_DAYS = 30;
 const DEFAULT_REFRESH_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
+const CURRENT_TERMS_VERSION = "2026-04-06";
 
 @Injectable()
 export class AuthService {
@@ -90,6 +93,7 @@ export class AuthService {
         avatarUrl,
         isActive: true,
         isPremium: false,
+        ...this.buildTermsAcceptanceData(dto.termsAccepted),
         deletedAt: null,
       },
       select: AUTH_USER_SELECT,
@@ -192,6 +196,7 @@ export class AuthService {
           avatarUrl,
           isActive: true,
           isPremium: false,
+          ...this.buildTermsAcceptanceData(dto.termsAccepted),
           deletedAt: null,
         },
         select: AUTH_USER_SELECT,
@@ -205,6 +210,17 @@ export class AuthService {
           select: AUTH_USER_SELECT,
         });
       }
+    }
+
+    if (
+      dto.termsAccepted &&
+      (!user.termsAcceptedAt || user.termsVersion !== CURRENT_TERMS_VERSION)
+    ) {
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: this.buildTermsAcceptanceData(true),
+        select: AUTH_USER_SELECT,
+      });
     }
 
     if (!user.isActive) {
@@ -335,7 +351,9 @@ export class AuthService {
     const refreshExpirationMs = this.getRefreshExpirationMs();
     const now = Date.now();
     const revokedSessionCutoff = new Date(now - retentionMs);
-    const staleSessionCutoff = new Date(now - retentionMs - refreshExpirationMs);
+    const staleSessionCutoff = new Date(
+      now - retentionMs - refreshExpirationMs,
+    );
 
     const deleted = await this.prisma.authSession.deleteMany({
       where: {
@@ -607,6 +625,17 @@ export class AuthService {
     };
 
     return value * multipliers[unit];
+  }
+
+  private buildTermsAcceptanceData(termsAccepted?: boolean) {
+    if (!termsAccepted) {
+      return {};
+    }
+
+    return {
+      termsAcceptedAt: new Date(),
+      termsVersion: CURRENT_TERMS_VERSION,
+    };
   }
 
   private logSecurityEvent(

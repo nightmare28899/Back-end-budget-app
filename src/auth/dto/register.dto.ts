@@ -1,5 +1,6 @@
 import { Transform } from "class-transformer";
 import {
+  IsBoolean,
   IsEmail,
   IsIn,
   IsNotEmpty,
@@ -13,6 +14,7 @@ import {
   trimLowerCaseStringValue,
   trimStringValue,
 } from "../../common/dto/string-transformers";
+import { parseOptionalBooleanValue } from "../../common/dto/boolean-transformers";
 
 export class RegisterDto {
   @ApiProperty({ example: "john@example.com" })
@@ -41,4 +43,14 @@ export class RegisterDto {
   @IsString()
   @IsIn(["user"])
   role?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Whether the client presented and collected acceptance of the current Terms and Conditions.",
+  })
+  @Transform(({ value }) => parseOptionalBooleanValue(value as unknown))
+  @IsOptional()
+  @IsBoolean()
+  termsAccepted?: boolean;
 }
