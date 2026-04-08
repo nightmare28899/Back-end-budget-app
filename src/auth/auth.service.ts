@@ -69,130 +69,28 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto, avatarFile?: Express.Multer.File) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    if (existing) {
-      throw new ConflictException("Email already registered");
-    }
-
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
-    let avatarUrl: string | undefined;
-
-    if (avatarFile) {
-      avatarUrl = await this.storageService.uploadFile(avatarFile, "avatars");
-    }
-
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        name: dto.name,
-        password: hashedPassword,
-        role: dto.role ?? "user",
-        avatarUrl,
-        isActive: true,
-        isPremium: false,
-        ...this.buildTermsAcceptanceData(dto.termsAccepted),
-        deletedAt: null,
-      },
-      select: AUTH_USER_SELECT,
-    });
-
-    this.logSecurityEvent("log", "auth.register.success", {
-      userId: user.id,
-      email: this.maskEmail(user.email),
-    });
-
-    return this.createAuthResponse(user, "User registered successfully");
-  }
-
-  async login(dto: LoginDto) {
-    const normalizedEmail = dto.email.trim().toLowerCase();
-    const user = await this.prisma.user.findUnique({
-      where: { email: normalizedEmail },
-      select: LOGIN_USER_SELECT,
-    });
-
-    if (!user) {
-      this.logSecurityEvent("warn", "auth.login.invalid_user", {
-        email: this.maskEmail(normalizedEmail),
+    return this.runAuthOperation("register", async () => {
+      const existing = await this.prisma.user.findUnique({
+        where: { email: dto.email },
       });
-      throw new UnauthorizedException("Invalid credentials");
-    }
 
-    if (!user.isActive) {
-      this.logSecurityEvent("warn", "auth.login.disabled_account", {
-        userId: user.id,
-        email: this.maskEmail(user.email),
-      });
-      throw new UnauthorizedException("Account is disabled");
-    }
+      if (existing) {
+        throw new ConflictException("Email already registered");
+      }
 
-    const passwordValid = await bcrypt.compare(dto.password, user.password);
+      const hashedPassword = await bcrypt.hash(dto.password, 10);
+      let avatarUrl: string | undefined;
 
-    if (!passwordValid) {
-      this.logSecurityEvent("warn", "auth.login.invalid_password", {
-        userId: user.id,
-        email: this.maskEmail(user.email),
-      });
-      throw new UnauthorizedException("Invalid credentials");
-    }
+      if (avatarFile) {
+        avatarUrl = await this.storageService.uploadFile(avatarFile, "avatars");
+      }
 
-    if (user.deletedAt) {
-      this.logSecurityEvent("log", "auth.login.restore_deleted_user", {
-        userId: user.id,
-        email: this.maskEmail(user.email),
-      });
-      return this.createAuthResponse(
-        await this.restoreDeletedUser(user.id),
-        "Login successful",
-      );
-    }
-
-    this.logSecurityEvent("log", "auth.login.success", {
-      userId: user.id,
-      email: this.maskEmail(user.email),
-    });
-    return this.createAuthResponse(user, "Login successful");
-  }
-
-  async loginWithGoogle(dto: GoogleAuthDto) {
-    const decodedToken = await this.verifyGoogleToken(dto.firebaseIdToken);
-    const provider = decodedToken.firebase?.sign_in_provider;
-
-    if (provider !== "google.com") {
-      this.logSecurityEvent("warn", "auth.google.unsupported_provider", {
-        provider,
-      });
-      throw new UnauthorizedException("Unsupported Google sign-in provider");
-    }
-
-    const email = decodedToken.email?.trim().toLowerCase();
-    if (!email || decodedToken.email_verified !== true) {
-      this.logSecurityEvent("warn", "auth.google.unverified_email", {
-        email: this.maskEmail(email),
-      });
-      throw new UnauthorizedException("Google account email is not verified");
-    }
-    const googleAvatarUrl = this.resolveGoogleAvatarUrl(decodedToken.picture);
-
-    let user = await this.prisma.user.findUnique({
-      where: { email },
-      select: AUTH_USER_SELECT,
-    });
-
-    if (!user) {
-      const generatedPassword = randomBytes(32).toString("hex");
-      const hashedPassword = await bcrypt.hash(generatedPassword, 10);
-      const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
-
-      user = await this.prisma.user.create({
+      const user = await this.prisma.user.create({
         data: {
-          email,
-          name: this.resolveGoogleDisplayName(decodedToken.name, email),
+          email: dto.email,
+          name: dto.name,
           password: hashedPassword,
-          role: "user",
+          role: dto.role ?? "user",
           avatarUrl,
           isActive: true,
           isPremium: false,
@@ -201,52 +99,160 @@ export class AuthService {
         },
         select: AUTH_USER_SELECT,
       });
-    } else if (!user.avatarUrl && googleAvatarUrl) {
-      const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
-      if (avatarUrl) {
+
+      this.logSecurityEvent("log", "auth.register.success", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
+
+      return this.createAuthResponse(user, "User registered successfully");
+    });
+  }
+
+  async login(dto: LoginDto) {
+    return this.runAuthOperation("login", async () => {
+      const normalizedEmail = dto.email.trim().toLowerCase();
+      const user = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: LOGIN_USER_SELECT,
+      });
+
+      if (!user) {
+        this.logSecurityEvent("warn", "auth.login.invalid_user", {
+          email: this.maskEmail(normalizedEmail),
+        });
+        throw new UnauthorizedException("Invalid credentials");
+      }
+
+      if (!user.isActive) {
+        this.logSecurityEvent("warn", "auth.login.disabled_account", {
+          userId: user.id,
+          email: this.maskEmail(user.email),
+        });
+        throw new UnauthorizedException("Account is disabled");
+      }
+
+      const passwordValid = await bcrypt.compare(dto.password, user.password);
+
+      if (!passwordValid) {
+        this.logSecurityEvent("warn", "auth.login.invalid_password", {
+          userId: user.id,
+          email: this.maskEmail(user.email),
+        });
+        throw new UnauthorizedException("Invalid credentials");
+      }
+
+      if (user.deletedAt) {
+        this.logSecurityEvent("log", "auth.login.restore_deleted_user", {
+          userId: user.id,
+          email: this.maskEmail(user.email),
+        });
+        return this.createAuthResponse(
+          await this.restoreDeletedUser(user.id),
+          "Login successful",
+        );
+      }
+
+      this.logSecurityEvent("log", "auth.login.success", {
+        userId: user.id,
+        email: this.maskEmail(user.email),
+      });
+      return this.createAuthResponse(user, "Login successful");
+    });
+  }
+
+  async loginWithGoogle(dto: GoogleAuthDto) {
+    return this.runAuthOperation("google login", async () => {
+      const decodedToken = await this.verifyGoogleToken(dto.firebaseIdToken);
+      const provider = decodedToken.firebase?.sign_in_provider;
+
+      if (provider !== "google.com") {
+        this.logSecurityEvent("warn", "auth.google.unsupported_provider", {
+          provider,
+        });
+        throw new UnauthorizedException("Unsupported Google sign-in provider");
+      }
+
+      const email = decodedToken.email?.trim().toLowerCase();
+      if (!email || decodedToken.email_verified !== true) {
+        this.logSecurityEvent("warn", "auth.google.unverified_email", {
+          email: this.maskEmail(email),
+        });
+        throw new UnauthorizedException("Google account email is not verified");
+      }
+      const googleAvatarUrl = this.resolveGoogleAvatarUrl(decodedToken.picture);
+
+      let user = await this.prisma.user.findUnique({
+        where: { email },
+        select: AUTH_USER_SELECT,
+      });
+
+      if (!user) {
+        const generatedPassword = randomBytes(32).toString("hex");
+        const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+        const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
+
+        user = await this.prisma.user.create({
+          data: {
+            email,
+            name: this.resolveGoogleDisplayName(decodedToken.name, email),
+            password: hashedPassword,
+            role: "user",
+            avatarUrl,
+            isActive: true,
+            isPremium: false,
+            ...this.buildTermsAcceptanceData(dto.termsAccepted),
+            deletedAt: null,
+          },
+          select: AUTH_USER_SELECT,
+        });
+      } else if (!user.avatarUrl && googleAvatarUrl) {
+        const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
+        if (avatarUrl) {
+          user = await this.prisma.user.update({
+            where: { id: user.id },
+            data: { avatarUrl },
+            select: AUTH_USER_SELECT,
+          });
+        }
+      }
+
+      if (
+        dto.termsAccepted &&
+        (!user.termsAcceptedAt || user.termsVersion !== CURRENT_TERMS_VERSION)
+      ) {
         user = await this.prisma.user.update({
           where: { id: user.id },
-          data: { avatarUrl },
+          data: this.buildTermsAcceptanceData(true),
           select: AUTH_USER_SELECT,
         });
       }
-    }
 
-    if (
-      dto.termsAccepted &&
-      (!user.termsAcceptedAt || user.termsVersion !== CURRENT_TERMS_VERSION)
-    ) {
-      user = await this.prisma.user.update({
-        where: { id: user.id },
-        data: this.buildTermsAcceptanceData(true),
-        select: AUTH_USER_SELECT,
-      });
-    }
+      if (!user.isActive) {
+        this.logSecurityEvent("warn", "auth.google.disabled_account", {
+          userId: user.id,
+          email: this.maskEmail(user.email),
+        });
+        throw new UnauthorizedException("Account is disabled");
+      }
 
-    if (!user.isActive) {
-      this.logSecurityEvent("warn", "auth.google.disabled_account", {
+      if (user.deletedAt) {
+        this.logSecurityEvent("log", "auth.google.restore_deleted_user", {
+          userId: user.id,
+          email: this.maskEmail(user.email),
+        });
+        return this.createAuthResponse(
+          await this.restoreDeletedUser(user.id),
+          "Google authentication successful",
+        );
+      }
+
+      this.logSecurityEvent("log", "auth.google.success", {
         userId: user.id,
         email: this.maskEmail(user.email),
       });
-      throw new UnauthorizedException("Account is disabled");
-    }
-
-    if (user.deletedAt) {
-      this.logSecurityEvent("log", "auth.google.restore_deleted_user", {
-        userId: user.id,
-        email: this.maskEmail(user.email),
-      });
-      return this.createAuthResponse(
-        await this.restoreDeletedUser(user.id),
-        "Google authentication successful",
-      );
-    }
-
-    this.logSecurityEvent("log", "auth.google.success", {
-      userId: user.id,
-      email: this.maskEmail(user.email),
+      return this.createAuthResponse(user, "Google authentication successful");
     });
-    return this.createAuthResponse(user, "Google authentication successful");
   }
 
   async refreshToken(refreshToken: string) {
@@ -320,6 +326,7 @@ export class AuthService {
         });
         throw error;
       }
+      this.throwIfAuthInfrastructureError("refresh", error);
       this.logSecurityEvent("warn", "auth.refresh.invalid_token", {
         reason: error instanceof Error ? error.message : "unknown",
       });
@@ -636,6 +643,80 @@ export class AuthService {
       termsAcceptedAt: new Date(),
       termsVersion: CURRENT_TERMS_VERSION,
     };
+  }
+
+  private async runAuthOperation<T>(
+    operation: "register" | "login" | "google login",
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await callback();
+    } catch (error) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof UnauthorizedException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
+
+      this.throwIfAuthInfrastructureError(operation, error);
+      throw error;
+    }
+  }
+
+  private throwIfAuthInfrastructureError(
+    operation: string,
+    error: unknown,
+  ): void {
+    const prismaCode = this.getPrismaErrorCode(error);
+    if (prismaCode === "P2021" || prismaCode === "P2022") {
+      this.logger.error(
+        `Auth ${operation} failed due to a database schema mismatch (${prismaCode}). Apply the latest Prisma migrations for auth sessions and terms acceptance.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new ServiceUnavailableException(
+        "Authentication service is temporarily unavailable. Apply the latest backend database migrations and try again.",
+      );
+    }
+
+    if (prismaCode === "P1001" || prismaCode === "P1008") {
+      this.logger.error(
+        `Auth ${operation} failed because the database is unavailable (${prismaCode}).`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new ServiceUnavailableException(
+        "Authentication service is temporarily unavailable. Please try again later.",
+      );
+    }
+
+    if (this.getErrorName(error) === "PrismaClientInitializationError") {
+      this.logger.error(
+        `Auth ${operation} failed because Prisma could not initialize.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new ServiceUnavailableException(
+        "Authentication service is temporarily unavailable. Please try again later.",
+      );
+    }
+  }
+
+  private getPrismaErrorCode(error: unknown): string | null {
+    if (!error || typeof error !== "object" || !("code" in error)) {
+      return null;
+    }
+
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
+  }
+
+  private getErrorName(error: unknown): string | null {
+    if (!error || typeof error !== "object" || !("name" in error)) {
+      return null;
+    }
+
+    const name = (error as { name?: unknown }).name;
+    return typeof name === "string" ? name : null;
   }
 
   private logSecurityEvent(
