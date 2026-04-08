@@ -35,33 +35,34 @@ enum DevicePlatform {
 }
 
 model User {
-  id          String     @id @default(uuid())
-  email       String     @unique
-  password    String
-  name        String
-  role        String     @default("user")
-  avatarUrl   String?
-  dailyBudget Decimal    @default(0) @db.Decimal(10, 2)
-  budgetAmount Decimal   @default(0) @db.Decimal(10, 2)
-  budgetPeriod String    @default("daily")
+  id                String          @id @default(uuid())
+  email             String          @unique
+  password          String
+  name              String
+  role              String          @default("user")
+  avatarUrl         String?
+  dailyBudget       Decimal         @default(0) @db.Decimal(10, 2)
+  budgetAmount      Decimal         @default(0) @db.Decimal(10, 2)
+  budgetPeriod      String          @default("daily")
   budgetPeriodStart DateTime?
-  budgetPeriodEnd DateTime?
-  currency    String     @default("MXN")
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-  isActive    Boolean    @default(true)
-  isPremium   Boolean    @default(false)
-  termsAcceptedAt DateTime? @map("terms_accepted_at")
-  termsVersion String?   @map("terms_version")
-  deletedAt   DateTime?  @map("deleted_at")
-  categories    Category[]
-  creditCards   CreditCard[]
-  expenses      Expense[]
-  incomes       Income[]
-  subscriptions Subscription[]
-  savingsGoals  SavingsGoal[]
-  deviceTokens  DeviceToken[]
-  authSessions  AuthSession[]
+  budgetPeriodEnd   DateTime?
+  currency          String          @default("MXN")
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  isActive          Boolean         @default(true)
+  isPremium         Boolean         @default(false)
+  termsAcceptedAt   DateTime?       @map("terms_accepted_at")
+  termsVersion      String?         @map("terms_version")
+  deletedAt         DateTime?       @map("deleted_at")
+  categories        Category[]
+  creditCards       CreditCard[]
+  expenses          Expense[]
+  incomes           Income[]
+  subscriptions     Subscription[]
+  savingsGoals      SavingsGoal[]
+  deviceTokens      DeviceToken[]
+  authSessions      AuthSession[]
+  reportHistory     ReportHistory[]
 
   @@map("users")
 }
@@ -78,6 +79,24 @@ model AuthSession {
   @@index([userId])
   @@index([revokedAt])
   @@map("auth_sessions")
+}
+
+model ReportHistory {
+  id            String   @id @default(uuid())
+  periodType    String   @map("period_type")
+  source        String   @default("manual")
+  referenceDate DateTime @map("reference_date")
+  reportStart   DateTime @map("report_start")
+  reportEnd     DateTime @map("report_end")
+  snapshot      Json
+  userId        String
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, periodType, referenceDate])
+  @@map("report_history")
 }
 
 model CreditCard {
@@ -117,33 +136,33 @@ model Category {
 }
 
 model Expense {
-  id                          String               @id @default(uuid())
+  id                          String                @id @default(uuid())
   title                       String
-  cost                        Decimal              @db.Decimal(10, 2)
-  currency                    String               @default("MXN")
-  paymentMethod               PaymentMethod        @default(CASH)
+  cost                        Decimal               @db.Decimal(10, 2)
+  currency                    String                @default("MXN")
+  paymentMethod               PaymentMethod         @default(CASH)
   creditCardId                String?
-  isSubscription              Boolean              @default(false)
+  isSubscription              Boolean               @default(false)
   subscriptionId              String?
-  isInstallment               Boolean              @default(false)
+  isInstallment               Boolean               @default(false)
   installmentGroupId          String?
   installmentCount            Int?
   installmentIndex            Int?
-  installmentTotalAmount      Decimal?             @db.Decimal(10, 2)
+  installmentTotalAmount      Decimal?              @db.Decimal(10, 2)
   installmentFrequency        InstallmentFrequency?
   installmentPurchaseDate     DateTime?
   installmentFirstPaymentDate DateTime?
   imageUrl                    String?
   note                        String?
-  date                        DateTime             @default(now())
+  date                        DateTime              @default(now())
   categoryId                  String?
   userId                      String
-  createdAt                   DateTime             @default(now())
-  updatedAt                   DateTime             @updatedAt
-  category                    Category?            @relation(fields: [categoryId], references: [id])
-  creditCard                  CreditCard?          @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
-  subscription                Subscription?        @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  user                        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt                   DateTime              @default(now())
+  updatedAt                   DateTime              @updatedAt
+  category                    Category?             @relation(fields: [categoryId], references: [id])
+  creditCard                  CreditCard?           @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
+  subscription                Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  user                        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
   @@index([userId, categoryId])
@@ -172,25 +191,25 @@ model Income {
 }
 
 model Subscription {
-  id              String       @id @default(uuid())
-  name            String
-  cost            Decimal       @db.Decimal(10, 2)
-  paymentMethod   PaymentMethod @default(CREDIT_CARD)
-  creditCardId    String?
-  currency        String       @default("MXN")
-  billingCycle    BillingCycle @default(MONTHLY)
-  nextPaymentDate DateTime
-  reminderDays    Int          @default(3)
+  id                  String        @id @default(uuid())
+  name                String
+  cost                Decimal       @db.Decimal(10, 2)
+  paymentMethod       PaymentMethod @default(CREDIT_CARD)
+  creditCardId        String?
+  currency            String        @default("MXN")
+  billingCycle        BillingCycle  @default(MONTHLY)
+  nextPaymentDate     DateTime
+  reminderDays        Int           @default(3)
   lastReminderSentFor DateTime?
-  isActive        Boolean      @default(true)
-  logoUrl         String?
-  hexColor        String?
-  userId          String
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  creditCard      CreditCard?  @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
-  expenses        Expense[]
-  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isActive            Boolean       @default(true)
+  logoUrl             String?
+  hexColor            String?
+  userId              String
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  creditCard          CreditCard?   @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
+  expenses            Expense[]
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, nextPaymentDate])
   @@index([userId, isActive])
