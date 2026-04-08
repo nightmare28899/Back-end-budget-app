@@ -103,13 +103,14 @@ model CreditCard {
 }
 
 model Category {
-  id       String    @id @default(uuid())
-  name     String
-  icon     String?
-  color    String?
-  userId   String
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expenses Expense[]
+  id           String    @id @default(uuid())
+  name         String
+  icon         String?
+  color        String?
+  budgetAmount Decimal?  @map("budget_amount") @db.Decimal(10, 2)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expenses     Expense[]
 
   @@unique([userId, name])
   @@map("categories")

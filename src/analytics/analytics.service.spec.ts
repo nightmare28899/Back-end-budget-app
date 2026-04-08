@@ -5,16 +5,18 @@ import { formatDateOnly } from "../common/budget/budget.utils";
 describe("AnalyticsService", () => {
   type ExpenseWhere = {
     where: {
-      date: {
+      date?: {
         gte: Date;
         lte: Date;
       };
+      categoryId?: unknown;
     };
   };
 
   type ExpenseRow = {
     cost: number;
     date: Date;
+    categoryId?: string | null;
     category?: {
       name?: string | null;
       icon?: string | null;
@@ -31,14 +33,38 @@ describe("AnalyticsService", () => {
     nextPaymentDate: Date;
   };
 
+  type CategoryRow = {
+    id: string;
+    name: string;
+    icon?: string | null;
+    color?: string | null;
+    budgetAmount?: number | null;
+  };
+
+  type UserBudgetRow = {
+    dailyBudget?: number | null;
+    budgetAmount?: number | null;
+    budgetPeriod?: string | null;
+    budgetPeriodStart?: Date | null;
+    budgetPeriodEnd?: Date | null;
+  };
+
   const expenseFindMany = jest.fn<Promise<ExpenseRow[]>, [ExpenseWhere]>();
   const subscriptionFindMany = jest.fn<Promise<SubscriptionRow[]>, [unknown]>();
+  const categoryFindMany = jest.fn<Promise<CategoryRow[]>, [unknown]>();
+  const userFindUnique = jest.fn<Promise<UserBudgetRow | null>, [unknown]>();
   const prisma = {
     expense: {
       findMany: expenseFindMany,
     },
     subscription: {
       findMany: subscriptionFindMany,
+    },
+    category: {
+      findMany: categoryFindMany,
+    },
+    user: {
+      findUnique: userFindUnique,
     },
   };
 
@@ -49,6 +75,8 @@ describe("AnalyticsService", () => {
     jest.setSystemTime(new Date(2026, 3, 7, 10, 0, 0, 0));
     expenseFindMany.mockReset();
     subscriptionFindMany.mockReset();
+    categoryFindMany.mockReset();
+    userFindUnique.mockReset();
     service = new AnalyticsService(prisma as never);
   });
 
@@ -157,5 +185,92 @@ describe("AnalyticsService", () => {
       monthlyEquivalent: 100,
       projectedSavings: 600,
     });
+  });
+
+  it("builds category budget statuses inside the current spending plan window", async () => {
+    userFindUnique.mockResolvedValue({
+      budgetAmount: 3000,
+      dailyBudget: 3000,
+      budgetPeriod: "monthly",
+      budgetPeriodStart: null,
+      budgetPeriodEnd: null,
+    });
+    categoryFindMany.mockResolvedValue([
+      {
+        id: "food",
+        name: "Food",
+        icon: "restaurant",
+        color: "#FFAA00",
+        budgetAmount: 900,
+      },
+      {
+        id: "transport",
+        name: "Transport",
+        icon: "car",
+        color: "#00AAFF",
+        budgetAmount: 200,
+      },
+      {
+        id: "fun",
+        name: "Fun",
+        icon: "game-controller",
+        color: "#AA66FF",
+        budgetAmount: null,
+      },
+    ]);
+    expenseFindMany.mockResolvedValue([
+      { cost: 520, date: new Date(2026, 3, 2, 9, 0, 0, 0), categoryId: "food" },
+      {
+        cost: 280,
+        date: new Date(2026, 3, 5, 12, 0, 0, 0),
+        categoryId: "food",
+      },
+      {
+        cost: 240,
+        date: new Date(2026, 3, 6, 8, 30, 0, 0),
+        categoryId: "transport",
+      },
+      { cost: 120, date: new Date(2026, 3, 7, 8, 30, 0, 0), categoryId: "fun" },
+    ]);
+
+    const result = await service.getCategoryBudgets("user-1", "2026-04-07");
+
+    expect(result.period).toEqual({
+      type: "monthly",
+      start: "2026-04-01",
+      end: "2026-04-30",
+    });
+    expect(result.totalBudgeted).toBe(1100);
+    expect(result.totalSpentBudgeted).toBe(1040);
+    expect(result.totalRemaining).toBe(60);
+    expect(result.categoriesWithBudget).toBe(2);
+    expect(result.overBudgetCount).toBe(1);
+    expect(result.watchCount).toBe(1);
+    expect(result.items.slice(0, 3)).toEqual([
+      expect.objectContaining({
+        categoryId: "transport",
+        budgetAmount: 200,
+        spent: 240,
+        remaining: -40,
+        percentage: 120,
+        status: "off_track",
+      }),
+      expect.objectContaining({
+        categoryId: "food",
+        budgetAmount: 900,
+        spent: 800,
+        remaining: 100,
+        percentage: 88.9,
+        status: "watch",
+      }),
+      expect.objectContaining({
+        categoryId: "fun",
+        budgetAmount: 0,
+        spent: 120,
+        remaining: 0,
+        percentage: 0,
+        status: "no_budget",
+      }),
+    ]);
   });
 });

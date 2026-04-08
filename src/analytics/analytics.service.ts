@@ -16,6 +16,40 @@ export interface CategoryBreakdownItem {
   percentage: number;
 }
 
+export type CategoryBudgetStatusTone =
+  | "no_budget"
+  | "on_track"
+  | "watch"
+  | "off_track";
+
+export interface CategoryBudgetStatus {
+  categoryId: string;
+  name: string;
+  icon: string;
+  color: string;
+  budgetAmount: number;
+  spent: number;
+  remaining: number;
+  percentage: number;
+  expenseCount: number;
+  status: CategoryBudgetStatusTone;
+}
+
+export interface CategoryBudgetOverview {
+  period: {
+    type: BudgetPeriod;
+    start: string;
+    end: string;
+  };
+  totalBudgeted: number;
+  totalSpentBudgeted: number;
+  totalRemaining: number;
+  categoriesWithBudget: number;
+  overBudgetCount: number;
+  watchCount: number;
+  items: CategoryBudgetStatus[];
+}
+
 export interface BudgetSummary {
   period: {
     type: BudgetPeriod;
@@ -219,6 +253,144 @@ export class AnalyticsService {
         }),
       )
       .sort((a, b) => b.total - a.total);
+  }
+
+  async getCategoryBudgets(
+    userId: string,
+    referenceDate?: string,
+  ): Promise<CategoryBudgetOverview> {
+    const user = await this.getBudgetConfig(userId);
+    const analyticsNow = this.getAnalyticsReferenceNow(
+      referenceDate,
+      "referenceDate",
+    );
+    const budgetWindow = resolveBudgetWindow(
+      {
+        budgetAmount: user?.budgetAmount,
+        dailyBudget: user?.dailyBudget,
+        budgetPeriod: user?.budgetPeriod,
+        budgetPeriodStart: user?.budgetPeriodStart,
+        budgetPeriodEnd: user?.budgetPeriodEnd,
+      },
+      analyticsNow,
+    );
+    const scopedEnd =
+      budgetWindow.end.getTime() <= analyticsNow.getTime()
+        ? budgetWindow.end
+        : analyticsNow;
+
+    const [categories, expenses] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          name: true,
+          icon: true,
+          color: true,
+          budgetAmount: true,
+        },
+        orderBy: { name: "asc" },
+      }),
+      this.prisma.expense.findMany({
+        where: {
+          userId,
+          categoryId: { not: null },
+          date: { gte: budgetWindow.start, lte: scopedEnd },
+        },
+        select: {
+          cost: true,
+          categoryId: true,
+        },
+      }),
+    ]);
+
+    const totalsByCategory = new Map<
+      string,
+      { spent: number; expenseCount: number }
+    >();
+    for (const expense of expenses) {
+      const categoryId = expense.categoryId;
+      if (!categoryId) {
+        continue;
+      }
+
+      const current = totalsByCategory.get(categoryId);
+      totalsByCategory.set(categoryId, {
+        spent: (current?.spent ?? 0) + Number(expense.cost),
+        expenseCount: (current?.expenseCount ?? 0) + 1,
+      });
+    }
+
+    const items = categories
+      .map((category): CategoryBudgetStatus => {
+        const spent = totalsByCategory.get(category.id)?.spent ?? 0;
+        const expenseCount =
+          totalsByCategory.get(category.id)?.expenseCount ?? 0;
+        const budgetAmount = Number(category.budgetAmount ?? 0);
+        const hasBudget = budgetAmount > 0;
+        const remaining = hasBudget ? budgetAmount - spent : 0;
+        const percentage =
+          hasBudget && budgetAmount > 0
+            ? this.roundPercent((spent / budgetAmount) * 100)
+            : 0;
+
+        return {
+          categoryId: category.id,
+          name: category.name,
+          icon: category.icon ?? "cube-outline",
+          color: category.color ?? "#95A5A6",
+          budgetAmount: this.roundMoney(budgetAmount),
+          spent: this.roundMoney(spent),
+          remaining: this.roundMoney(remaining),
+          percentage,
+          expenseCount,
+          status: this.getCategoryBudgetTone(spent, budgetAmount),
+        };
+      })
+      .sort((left, right) => {
+        const toneDiff =
+          this.getCategoryBudgetSortWeight(left.status) -
+          this.getCategoryBudgetSortWeight(right.status);
+        if (toneDiff !== 0) {
+          return toneDiff;
+        }
+
+        if (left.budgetAmount !== right.budgetAmount) {
+          return right.budgetAmount - left.budgetAmount;
+        }
+
+        if (left.spent !== right.spent) {
+          return right.spent - left.spent;
+        }
+
+        return left.name.localeCompare(right.name);
+      });
+
+    const budgetedItems = items.filter((item) => item.budgetAmount > 0);
+
+    return {
+      period: {
+        type: budgetWindow.period,
+        start: formatDateOnly(budgetWindow.start),
+        end: formatDateOnly(budgetWindow.end),
+      },
+      totalBudgeted: this.roundMoney(
+        budgetedItems.reduce((sum, item) => sum + item.budgetAmount, 0),
+      ),
+      totalSpentBudgeted: this.roundMoney(
+        budgetedItems.reduce((sum, item) => sum + item.spent, 0),
+      ),
+      totalRemaining: this.roundMoney(
+        budgetedItems.reduce((sum, item) => sum + item.remaining, 0),
+      ),
+      categoriesWithBudget: budgetedItems.length,
+      overBudgetCount: budgetedItems.filter(
+        (item) => item.status === "off_track",
+      ).length,
+      watchCount: budgetedItems.filter((item) => item.status === "watch")
+        .length,
+      items,
+    };
   }
 
   async getBudgetSummary(
@@ -596,6 +768,39 @@ export class AnalyticsService {
 
   private normalizeHorizonMonths(raw?: number) {
     return Math.min(24, Math.max(1, Math.floor(raw || 6)));
+  }
+
+  private getCategoryBudgetTone(
+    spent: number,
+    budgetAmount: number,
+  ): CategoryBudgetStatusTone {
+    if (budgetAmount <= 0) {
+      return "no_budget";
+    }
+
+    if (spent > budgetAmount) {
+      return "off_track";
+    }
+
+    if (spent >= budgetAmount * 0.8) {
+      return "watch";
+    }
+
+    return "on_track";
+  }
+
+  private getCategoryBudgetSortWeight(status: CategoryBudgetStatusTone) {
+    switch (status) {
+      case "off_track":
+        return 0;
+      case "watch":
+        return 1;
+      case "on_track":
+        return 2;
+      case "no_budget":
+      default:
+        return 3;
+    }
   }
 
   private buildSpendWindowInsight(

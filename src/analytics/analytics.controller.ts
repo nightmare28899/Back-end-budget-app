@@ -56,6 +56,22 @@ export class AnalyticsController {
     );
   }
 
+  @Get("category-budgets")
+  @ApiOperation({
+    summary:
+      "Get category budget performance for the currently configured spending plan period",
+  })
+  @ApiQuery({ name: "referenceDate", required: false, type: String })
+  async getCategoryBudgets(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: AnalyticsSummaryQueryDto,
+  ) {
+    return this.analyticsService.getCategoryBudgets(
+      user.id,
+      query.referenceDate,
+    );
+  }
+
   @Get("weekly-summary")
   @ApiOperation({
     summary: "Get summary for the currently configured budget period",
