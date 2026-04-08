@@ -34,6 +34,56 @@ export interface BudgetSummary {
 
 export type WeeklySummary = BudgetSummary;
 
+export interface AnalyticsSpendWindow {
+  start: string;
+  end: string;
+  totalSpent: number;
+  expenseCount: number;
+  averagePerDay: number;
+  previousStart: string;
+  previousEnd: string;
+  previousTotalSpent: number;
+  changeAmount: number;
+  changePercent: number | null;
+}
+
+export interface AnalyticsCategoryImpact {
+  name: string;
+  icon: string;
+  color: string;
+  total: number;
+  percentage: number;
+}
+
+export interface AnalyticsSubscriptionOpportunity {
+  id: string;
+  name: string;
+  currency: string;
+  billingCycle: BillingCycle;
+  amount: number;
+  monthlyEquivalent: number;
+  projectedSavings: number;
+  nextPaymentDate: string;
+}
+
+export interface AnalyticsSubscriptionSavings {
+  horizonMonths: number;
+  monthlyRecurringSpend: number;
+  projectedSavings: number;
+  activeSubscriptions: number;
+  topSubscriptions: AnalyticsSubscriptionOpportunity[];
+}
+
+export interface AnalyticsInsights {
+  referenceDate: string;
+  weeklySpend: AnalyticsSpendWindow;
+  monthlySpend: AnalyticsSpendWindow & {
+    projectedTotal: number;
+  };
+  topCategory: AnalyticsCategoryImpact | null;
+  subscriptionSavings: AnalyticsSubscriptionSavings;
+}
+
 @Injectable()
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -242,6 +292,128 @@ export class AnalyticsService {
     return this.getBudgetSummary(userId, referenceDate);
   }
 
+  async getInsights(
+    userId: string,
+    referenceDate?: string,
+    horizonMonths = 6,
+  ): Promise<AnalyticsInsights> {
+    const analyticsNow = this.getAnalyticsReferenceNow(
+      referenceDate,
+      "referenceDate",
+    );
+    const normalizedHorizonMonths = this.normalizeHorizonMonths(horizonMonths);
+
+    const weeklyCurrentStart = this.getStartOfWeek(analyticsNow);
+    const weeklyComparableDays = this.getDayDistanceInclusive(
+      weeklyCurrentStart,
+      analyticsNow,
+    );
+    const weeklyPreviousStart = this.addDays(weeklyCurrentStart, -7);
+    const weeklyPreviousEnd = this.endOfDay(
+      this.addDays(weeklyPreviousStart, weeklyComparableDays - 1),
+    );
+
+    const monthlyCurrentStart = this.startOfMonth(analyticsNow);
+    const previousMonthStart = this.startOfMonth(
+      new Date(analyticsNow.getFullYear(), analyticsNow.getMonth() - 1, 1),
+    );
+    const previousMonthEnd = this.endOfDay(
+      new Date(
+        previousMonthStart.getFullYear(),
+        previousMonthStart.getMonth(),
+        Math.min(
+          analyticsNow.getDate(),
+          this.getDaysInMonth(previousMonthStart),
+        ),
+      ),
+    );
+
+    const expensesRangeStart =
+      weeklyPreviousStart.getTime() <= previousMonthStart.getTime()
+        ? weeklyPreviousStart
+        : previousMonthStart;
+    const expenses = await this.prisma.expense.findMany({
+      where: {
+        userId,
+        date: {
+          gte: expensesRangeStart,
+          lte: analyticsNow,
+        },
+      },
+      select: {
+        cost: true,
+        date: true,
+        category: {
+          select: {
+            name: true,
+            icon: true,
+            color: true,
+          },
+        },
+      },
+    });
+    const activeSubscriptions = await this.prisma.subscription.findMany({
+      where: {
+        userId,
+        isActive: true,
+        createdAt: {
+          lte: analyticsNow,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        cost: true,
+        currency: true,
+        billingCycle: true,
+        nextPaymentDate: true,
+      },
+      orderBy: { nextPaymentDate: "asc" },
+    });
+
+    const weeklySpend = this.buildSpendWindowInsight(
+      expenses,
+      weeklyCurrentStart,
+      analyticsNow,
+      weeklyPreviousStart,
+      weeklyPreviousEnd,
+    );
+    const monthlySpendBase = this.buildSpendWindowInsight(
+      expenses,
+      monthlyCurrentStart,
+      analyticsNow,
+      previousMonthStart,
+      previousMonthEnd,
+    );
+    const currentMonthDays = this.getDayDistanceInclusive(
+      monthlyCurrentStart,
+      analyticsNow,
+    );
+    const projectedMonthTotal =
+      currentMonthDays > 0
+        ? (monthlySpendBase.totalSpent / currentMonthDays) *
+          this.getDaysInMonth(analyticsNow)
+        : monthlySpendBase.totalSpent;
+
+    return {
+      referenceDate: formatDateOnly(analyticsNow),
+      weeklySpend,
+      monthlySpend: {
+        ...monthlySpendBase,
+        projectedTotal: this.roundMoney(projectedMonthTotal),
+      },
+      topCategory: this.getTopCategoryImpact(
+        expenses,
+        monthlyCurrentStart,
+        analyticsNow,
+      ),
+      subscriptionSavings: this.buildSubscriptionSavingsInsight(
+        activeSubscriptions,
+        normalizedHorizonMonths,
+      ),
+    };
+  }
+
   private async getReservedSubscriptionsTotal(
     userId: string,
     budgetStart: Date,
@@ -382,5 +554,213 @@ export class AnalyticsService {
     const next = new Date(date);
     next.setHours(23, 59, 59, 999);
     return next;
+  }
+
+  private startOfMonth(date: Date) {
+    return this.startOfDay(new Date(date.getFullYear(), date.getMonth(), 1));
+  }
+
+  private getStartOfWeek(date: Date) {
+    const next = this.startOfDay(date);
+    const dayOfWeek = next.getDay();
+    next.setDate(next.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+    return next;
+  }
+
+  private addDays(date: Date, days: number) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+  }
+
+  private getDayDistanceInclusive(start: Date, end: Date) {
+    const startTime = this.startOfDay(start).getTime();
+    const endTime = this.startOfDay(end).getTime();
+    return Math.max(
+      1,
+      Math.floor((endTime - startTime) / (24 * 60 * 60 * 1000)) + 1,
+    );
+  }
+
+  private getDaysInMonth(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  }
+
+  private roundMoney(value: number) {
+    return Math.round(value * 100) / 100;
+  }
+
+  private roundPercent(value: number) {
+    return Math.round(value * 10) / 10;
+  }
+
+  private normalizeHorizonMonths(raw?: number) {
+    return Math.min(24, Math.max(1, Math.floor(raw || 6)));
+  }
+
+  private buildSpendWindowInsight(
+    expenses: Array<{ cost: Prisma.Decimal | number; date: Date }>,
+    currentStart: Date,
+    currentEnd: Date,
+    previousStart: Date,
+    previousEnd: Date,
+  ): AnalyticsSpendWindow {
+    const currentExpenses = expenses.filter(
+      (expense) =>
+        expense.date.getTime() >= currentStart.getTime() &&
+        expense.date.getTime() <= currentEnd.getTime(),
+    );
+    const previousExpenses = expenses.filter(
+      (expense) =>
+        expense.date.getTime() >= previousStart.getTime() &&
+        expense.date.getTime() <= previousEnd.getTime(),
+    );
+
+    const totalSpent = currentExpenses.reduce(
+      (sum, expense) => sum + Number(expense.cost),
+      0,
+    );
+    const previousTotalSpent = previousExpenses.reduce(
+      (sum, expense) => sum + Number(expense.cost),
+      0,
+    );
+    const changeAmount = totalSpent - previousTotalSpent;
+    const currentDays = this.getDayDistanceInclusive(currentStart, currentEnd);
+
+    return {
+      start: formatDateOnly(currentStart),
+      end: formatDateOnly(currentEnd),
+      totalSpent: this.roundMoney(totalSpent),
+      expenseCount: currentExpenses.length,
+      averagePerDay: this.roundMoney(totalSpent / currentDays),
+      previousStart: formatDateOnly(previousStart),
+      previousEnd: formatDateOnly(previousEnd),
+      previousTotalSpent: this.roundMoney(previousTotalSpent),
+      changeAmount: this.roundMoney(changeAmount),
+      changePercent:
+        previousTotalSpent > 0
+          ? this.roundPercent((changeAmount / previousTotalSpent) * 100)
+          : null,
+    };
+  }
+
+  private getTopCategoryImpact(
+    expenses: Array<{
+      cost: Prisma.Decimal | number;
+      date: Date;
+      category: {
+        name: string | null;
+        icon: string | null;
+        color: string | null;
+      } | null;
+    }>,
+    start: Date,
+    end: Date,
+  ): AnalyticsCategoryImpact | null {
+    const categoryTotals = new Map<
+      string,
+      Omit<AnalyticsCategoryImpact, "percentage">
+    >();
+
+    for (const expense of expenses) {
+      if (
+        expense.date.getTime() < start.getTime() ||
+        expense.date.getTime() > end.getTime()
+      ) {
+        continue;
+      }
+
+      const categoryName = expense.category?.name ?? "Uncategorized";
+      const current = categoryTotals.get(categoryName);
+      const nextTotal = (current?.total ?? 0) + Number(expense.cost);
+
+      categoryTotals.set(categoryName, {
+        name: categoryName,
+        icon: expense.category?.icon ?? "cube-outline",
+        color: expense.category?.color ?? "#95A5A6",
+        total: nextTotal,
+      });
+    }
+
+    const values = Array.from(categoryTotals.values()).sort(
+      (left, right) => right.total - left.total,
+    );
+    if (!values.length) {
+      return null;
+    }
+
+    const totalSpent = values.reduce((sum, item) => sum + item.total, 0);
+    const topCategory = values[0];
+
+    return {
+      ...topCategory,
+      total: this.roundMoney(topCategory.total),
+      percentage:
+        totalSpent > 0
+          ? this.roundPercent((topCategory.total / totalSpent) * 100)
+          : 0,
+    };
+  }
+
+  private buildSubscriptionSavingsInsight(
+    subscriptions: Array<{
+      id: string;
+      name: string;
+      cost: Prisma.Decimal | number;
+      currency: string;
+      billingCycle: BillingCycle;
+      nextPaymentDate: Date;
+    }>,
+    horizonMonths: number,
+  ): AnalyticsSubscriptionSavings {
+    const topSubscriptions = subscriptions
+      .map((subscription) => {
+        const monthlyEquivalent =
+          Number(subscription.cost) *
+          this.getMonthlyFactor(subscription.billingCycle);
+
+        return {
+          id: subscription.id,
+          name: subscription.name,
+          currency: subscription.currency,
+          billingCycle: subscription.billingCycle,
+          amount: this.roundMoney(Number(subscription.cost)),
+          monthlyEquivalent: this.roundMoney(monthlyEquivalent),
+          projectedSavings: this.roundMoney(monthlyEquivalent * horizonMonths),
+          nextPaymentDate: formatDateOnly(subscription.nextPaymentDate),
+        };
+      })
+      .sort((left, right) => right.monthlyEquivalent - left.monthlyEquivalent)
+      .slice(0, 3);
+
+    const monthlyRecurringSpend = subscriptions.reduce(
+      (sum, subscription) =>
+        sum +
+        Number(subscription.cost) *
+          this.getMonthlyFactor(subscription.billingCycle),
+      0,
+    );
+
+    return {
+      horizonMonths,
+      monthlyRecurringSpend: this.roundMoney(monthlyRecurringSpend),
+      projectedSavings: this.roundMoney(monthlyRecurringSpend * horizonMonths),
+      activeSubscriptions: subscriptions.length,
+      topSubscriptions,
+    };
+  }
+
+  private getMonthlyFactor(cycle: BillingCycle) {
+    switch (cycle) {
+      case BillingCycle.DAILY:
+        return 365 / 12;
+      case BillingCycle.WEEKLY:
+        return 52 / 12;
+      case BillingCycle.YEARLY:
+        return 1 / 12;
+      case BillingCycle.MONTHLY:
+      default:
+        return 1;
+    }
   }
 }

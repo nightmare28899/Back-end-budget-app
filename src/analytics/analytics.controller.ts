@@ -12,6 +12,7 @@ import type { CurrentUserType } from "../common/types/current-user.type";
 import { DailyTotalsQueryDto } from "./dto/daily-totals-query.dto";
 import { AnalyticsSummaryQueryDto } from "./dto/analytics-summary-query.dto";
 import { CategoryBreakdownQueryDto } from "./dto/category-breakdown-query.dto";
+import { AnalyticsInsightsQueryDto } from "./dto/analytics-insights-query.dto";
 
 @ApiTags("Analytics")
 @ApiBearerAuth()
@@ -77,5 +78,23 @@ export class AnalyticsController {
     @Query() query: AnalyticsSummaryQueryDto,
   ) {
     return this.analyticsService.getBudgetSummary(user.id, query.referenceDate);
+  }
+
+  @Get("insights")
+  @ApiOperation({
+    summary:
+      "Get actionable spending and subscription savings insights for the selected date",
+  })
+  @ApiQuery({ name: "referenceDate", required: false, type: String })
+  @ApiQuery({ name: "horizonMonths", required: false, type: Number })
+  async getInsights(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: AnalyticsInsightsQueryDto,
+  ) {
+    return this.analyticsService.getInsights(
+      user.id,
+      query.referenceDate,
+      query.horizonMonths,
+    );
   }
 }
