@@ -32,6 +32,8 @@ const AUTH_USER_SELECT = {
   currency: true,
   isActive: true,
   isPremium: true,
+  weeklyReportEnabled: true,
+  monthlyReportEnabled: true,
   termsAcceptedAt: true,
   termsVersion: true,
   deletedAt: true,

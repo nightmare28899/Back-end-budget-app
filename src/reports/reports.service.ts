@@ -85,6 +85,11 @@ export class ReportsService {
     this.logger.log("Starting weekly report generation...");
 
     const users = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        weeklyReportEnabled: true,
+      },
       select: { id: true, email: true, name: true },
     });
 
@@ -94,6 +99,33 @@ export class ReportsService {
           periodType: "weekly",
         });
         this.logger.log(`Weekly report sent to ${user.email}`);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+        this.logger.error(`Failed to send report to ${user.email}: ${message}`);
+      }
+    }
+  }
+
+  @Cron("0 20 1 * *")
+  async sendMonthlyReports() {
+    this.logger.log("Starting monthly report generation...");
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        monthlyReportEnabled: true,
+      },
+      select: { id: true, email: true, name: true },
+    });
+
+    for (const user of users) {
+      try {
+        await this.sendReportForUser(user.id, user.email, user.name, {
+          periodType: "monthly",
+        });
+        this.logger.log(`Monthly report sent to ${user.email}`);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown error";

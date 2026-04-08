@@ -35,34 +35,36 @@ enum DevicePlatform {
 }
 
 model User {
-  id                String          @id @default(uuid())
-  email             String          @unique
-  password          String
-  name              String
-  role              String          @default("user")
-  avatarUrl         String?
-  dailyBudget       Decimal         @default(0) @db.Decimal(10, 2)
-  budgetAmount      Decimal         @default(0) @db.Decimal(10, 2)
-  budgetPeriod      String          @default("daily")
-  budgetPeriodStart DateTime?
-  budgetPeriodEnd   DateTime?
-  currency          String          @default("MXN")
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  isActive          Boolean         @default(true)
-  isPremium         Boolean         @default(false)
-  termsAcceptedAt   DateTime?       @map("terms_accepted_at")
-  termsVersion      String?         @map("terms_version")
-  deletedAt         DateTime?       @map("deleted_at")
-  categories        Category[]
-  creditCards       CreditCard[]
-  expenses          Expense[]
-  incomes           Income[]
-  subscriptions     Subscription[]
-  savingsGoals      SavingsGoal[]
-  deviceTokens      DeviceToken[]
-  authSessions      AuthSession[]
-  reportHistory     ReportHistory[]
+  id                   String          @id @default(uuid())
+  email                String          @unique
+  password             String
+  name                 String
+  role                 String          @default("user")
+  avatarUrl            String?
+  dailyBudget          Decimal         @default(0) @db.Decimal(10, 2)
+  budgetAmount         Decimal         @default(0) @db.Decimal(10, 2)
+  budgetPeriod         String          @default("daily")
+  budgetPeriodStart    DateTime?
+  budgetPeriodEnd      DateTime?
+  currency             String          @default("MXN")
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  isActive             Boolean         @default(true)
+  isPremium            Boolean         @default(false)
+  weeklyReportEnabled  Boolean         @default(true) @map("weekly_report_enabled")
+  monthlyReportEnabled Boolean         @default(false) @map("monthly_report_enabled")
+  termsAcceptedAt      DateTime?       @map("terms_accepted_at")
+  termsVersion         String?         @map("terms_version")
+  deletedAt            DateTime?       @map("deleted_at")
+  categories           Category[]
+  creditCards          CreditCard[]
+  expenses             Expense[]
+  incomes              Income[]
+  subscriptions        Subscription[]
+  savingsGoals         SavingsGoal[]
+  deviceTokens         DeviceToken[]
+  authSessions         AuthSession[]
+  reportHistory        ReportHistory[]
 
   @@map("users")
 }

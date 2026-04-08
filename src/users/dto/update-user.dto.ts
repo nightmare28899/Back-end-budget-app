@@ -97,6 +97,40 @@ export class UpdateUserDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
+    example: true,
+    description: "Enable automatic weekly email reports",
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase().trim();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return undefined;
+  })
+  @IsBoolean()
+  weeklyReportEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description: "Enable automatic monthly email reports",
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase().trim();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    return undefined;
+  })
+  @IsBoolean()
+  monthlyReportEnabled?: boolean;
+
+  @ApiPropertyOptional({
     example: false,
     description: "Premium entitlement flag (admin only)",
   })

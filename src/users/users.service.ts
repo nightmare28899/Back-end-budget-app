@@ -33,6 +33,8 @@ const userSelect = {
   currency: true,
   isActive: true,
   isPremium: true,
+  weeklyReportEnabled: true,
+  monthlyReportEnabled: true,
   deletedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -283,6 +285,12 @@ export class UsersService {
             }
           : {}),
         ...(dto.isPremium !== undefined ? { isPremium: dto.isPremium } : {}),
+        ...(dto.weeklyReportEnabled !== undefined
+          ? { weeklyReportEnabled: dto.weeklyReportEnabled }
+          : {}),
+        ...(dto.monthlyReportEnabled !== undefined
+          ? { monthlyReportEnabled: dto.monthlyReportEnabled }
+          : {}),
         ...(hashedPassword ? { password: hashedPassword } : {}),
         ...budgetData,
         avatarUrl: nextAvatarKey ?? undefined,
