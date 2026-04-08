@@ -17,6 +17,7 @@ import { SavingsModule } from "./savings/savings.module";
 import { IntakeModule } from "./intake/intake.module";
 import { CreditCardsModule } from "./credit-cards/credit-cards.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { IncomesModule } from "./incomes/incomes.module";
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { NotificationsModule } from "./notifications/notifications.module";
     ReportsModule,
     NotificationsModule,
     SubscriptionsModule,
+    IncomesModule,
     CreditCardsModule,
     HistoryModule,
     SavingsModule,
