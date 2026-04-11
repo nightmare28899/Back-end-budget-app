@@ -1,5 +1,6 @@
 import {
   formatDateOnly,
+  getBudgetAmountValue,
   normalizeBudgetPeriod,
   resolveBudgetWindow,
 } from "./budget.utils";
@@ -75,5 +76,12 @@ describe("budget.utils", () => {
     expect(formatDateOnly(window.start)).toBe("2026-03-01");
     expect(formatDateOnly(window.end)).toBe("2026-03-15");
     expect(window.totalDays).toBe(15);
+  });
+
+  it("prefers budgetAmount but still supports the legacy dailyBudget alias", () => {
+    expect(getBudgetAmountValue({ dailyBudget: 1800 })).toBe(1800);
+    expect(
+      getBudgetAmountValue({ budgetAmount: 3200, dailyBudget: 1800 }),
+    ).toBe(3200);
   });
 });

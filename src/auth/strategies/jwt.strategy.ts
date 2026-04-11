@@ -3,6 +3,7 @@ import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../../prisma/prisma.service";
+import { getBudgetAmountValue } from "../../common/budget/budget.utils";
 
 export interface JwtPayload {
   sub: string;
@@ -75,6 +76,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException("Account is disabled");
     }
 
+    const budgetAmount = getBudgetAmountValue(user);
+
     return {
       id: user.id,
       sessionId: payload.sid ?? null,
@@ -84,8 +87,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       currency: user.currency,
       isPremium: user.isPremium,
       budgetPeriod: user.budgetPeriod,
-      dailyBudget: Number(user.dailyBudget),
-      budgetAmount: Number(user.budgetAmount),
+      budgetAmount,
       budgetPeriodStart: user.budgetPeriodStart
         ? user.budgetPeriodStart.toISOString()
         : null,

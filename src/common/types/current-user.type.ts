@@ -4,7 +4,6 @@ export interface CurrentUserType {
   email: string;
   name: string;
   role: string;
-  dailyBudget?: number;
   budgetAmount?: number;
   budgetPeriod?: string;
   budgetPeriodStart?: string | null;

@@ -15,6 +15,7 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { QueryUsersDto } from "./dto/query-users.dto";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import {
+  getBudgetAmountValue,
   type BudgetPeriod,
   normalizeBudgetPeriod,
 } from "../common/budget/budget.utils";
@@ -376,7 +377,7 @@ export class UsersService {
   }
 
   private resolveBudgetForCreate(dto: CreateUserDto) {
-    const budgetAmount = dto.budgetAmount ?? dto.dailyBudget ?? 0;
+    const budgetAmount = getBudgetAmountValue(dto);
     const budgetPeriod = normalizeBudgetPeriod(dto.budgetPeriod);
     const budgetPeriodStart = dto.budgetPeriodStart
       ? new Date(dto.budgetPeriodStart)
@@ -417,9 +418,9 @@ export class UsersService {
     }
 
     const nextBudgetAmount =
-      dto.budgetAmount ??
-      dto.dailyBudget ??
-      Number(current.budgetAmount ?? current.dailyBudget);
+      dto.budgetAmount !== undefined || dto.dailyBudget !== undefined
+        ? getBudgetAmountValue(dto)
+        : getBudgetAmountValue(current);
 
     const nextBudgetPeriod =
       dto.budgetPeriod !== undefined

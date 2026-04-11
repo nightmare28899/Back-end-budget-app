@@ -28,6 +28,12 @@ export interface BudgetWindow {
   totalDays: number;
 }
 
+export function getBudgetAmountValue(
+  config?: Pick<BudgetConfigInput, "budgetAmount" | "dailyBudget"> | null,
+): number {
+  return Math.max(0, Number(config?.budgetAmount ?? config?.dailyBudget ?? 0));
+}
+
 export function normalizeBudgetPeriod(raw?: string | null): BudgetPeriod {
   if (!raw) {
     return DEFAULT_BUDGET_PERIOD;
@@ -70,10 +76,7 @@ export function resolveBudgetWindow(
   now = new Date(),
 ): BudgetWindow {
   const period = normalizeBudgetPeriod(config.budgetPeriod);
-  const amount = Math.max(
-    0,
-    Number(config.budgetAmount ?? config.dailyBudget ?? 0),
-  );
+  const amount = getBudgetAmountValue(config);
 
   const todayStart = startOfDay(now);
   const todayEnd = endOfDay(now);

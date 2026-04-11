@@ -17,6 +17,7 @@ import { FirebaseAdminService } from "../firebase/firebase-admin.service";
 import { RegisterDto, LoginDto, GoogleAuthDto } from "./dto";
 import { JwtPayload } from "./strategies/jwt.strategy";
 import type { CurrentUserType } from "../common/types/current-user.type";
+import { getBudgetAmountValue } from "../common/budget/budget.utils";
 
 const AUTH_USER_SELECT = {
   id: true,
@@ -463,14 +464,15 @@ export class AuthService {
     options?: AuthResponseOptions,
   ) {
     const tokens = await this.issueSessionTokens(user.id, user.email, options);
+    const budgetAmount = getBudgetAmountValue(user);
     const authUser = this.withAvatarPresignedUrl({
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
       avatarUrl: user.avatarUrl,
-      dailyBudget: user.dailyBudget,
-      budgetAmount: user.budgetAmount,
+      dailyBudget: budgetAmount,
+      budgetAmount,
       budgetPeriod: user.budgetPeriod,
       budgetPeriodStart: user.budgetPeriodStart,
       budgetPeriodEnd: user.budgetPeriodEnd,
