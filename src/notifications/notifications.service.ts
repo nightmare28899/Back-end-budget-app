@@ -1,7 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-} from "@nestjs/common";
+import { ForbiddenException, Injectable } from "@nestjs/common";
 import { DevicePlatform, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import type { CurrentUserType } from "../common/types/current-user.type";
@@ -9,6 +6,10 @@ import { FirebaseAdminService } from "../firebase/firebase-admin.service";
 import { RegisterDeviceTokenDto } from "./dto/register-device-token.dto";
 import { RemoveDeviceTokenDto } from "./dto/remove-device-token.dto";
 import { SendTestPushDto } from "./dto/send-test-push.dto";
+import {
+  normalizeNotificationLanguage,
+  type NotificationLanguage,
+} from "./notification-language";
 
 interface PushMessageInput {
   title: string;
@@ -16,11 +17,16 @@ interface PushMessageInput {
   data?: Record<string, string | number | boolean | null | undefined>;
 }
 
+interface LocalizedPushMessageInput {
+  resolveMessage: (language: NotificationLanguage) => PushMessageInput;
+}
+
 export interface SendPushResult {
   tokenCount: number;
   successCount: number;
   failureCount: number;
   invalidTokensRemoved: number;
+  failureReasons: Record<string, number>;
 }
 
 export interface SubscriptionReminderInput {
@@ -32,6 +38,8 @@ export interface SubscriptionReminderInput {
   nextPaymentDate: Date;
   daysRemaining: number;
 }
+
+type NotificationMessageInput = PushMessageInput | LocalizedPushMessageInput;
 
 const INVALID_TOKEN_CODES = new Set([
   "messaging/invalid-registration-token",
@@ -52,11 +60,13 @@ export class NotificationsService {
         userId,
         token: dto.token,
         platform: dto.platform as DevicePlatform,
+        language: normalizeNotificationLanguage(dto.language),
         lastSeenAt: new Date(),
       },
       update: {
         userId,
         platform: dto.platform as DevicePlatform,
+        language: normalizeNotificationLanguage(dto.language),
         lastSeenAt: new Date(),
       },
     });
@@ -112,30 +122,52 @@ export class NotificationsService {
     subscription: SubscriptionReminderInput,
   ): Promise<SendPushResult> {
     return this.sendToUser(subscription.userId, {
-      title: `Upcoming payment: ${subscription.name}`,
-      body: this.buildSubscriptionReminderBody(subscription),
-      data: {
-        type: "subscription_reminder",
-        subscriptionId: subscription.id,
-        upcomingDays: String(subscription.daysRemaining),
-        targetScreen: "UpcomingSubscriptions",
-      },
+      resolveMessage: (language) => ({
+        ...this.buildSubscriptionReminderMessage(subscription, language),
+        data: {
+          type: "subscription_reminder",
+          subscriptionId: subscription.id,
+          upcomingDays: String(subscription.daysRemaining),
+          targetScreen: "UpcomingSubscriptions",
+        },
+      }),
     });
   }
 
   async sendToUser(
     userId: string,
-    message: PushMessageInput,
+    message: NotificationMessageInput,
   ): Promise<SendPushResult> {
     const deviceTokens = await this.prisma.deviceToken.findMany({
       where: { userId },
-      select: { token: true },
+      select: { token: true, language: true },
       orderBy: { updatedAt: "desc" },
     });
 
-    const tokens = Array.from(
-      new Set(deviceTokens.map((item) => item.token.trim()).filter(Boolean)),
+    const recipientsByToken = new Map<string, NotificationLanguage>();
+    for (const deviceToken of deviceTokens) {
+      const normalizedToken = deviceToken.token.trim();
+      if (!normalizedToken || recipientsByToken.has(normalizedToken)) {
+        continue;
+      }
+
+      recipientsByToken.set(
+        normalizedToken,
+        normalizeNotificationLanguage(deviceToken.language),
+      );
+    }
+
+    const recipientGroups = Array.from(recipientsByToken.entries()).reduce<
+      Record<NotificationLanguage, string[]>
+    >(
+      (acc, [token, language]) => {
+        acc[language].push(token);
+        return acc;
+      },
+      { en: [], es: [] },
     );
+
+    const tokens = Array.from(recipientsByToken.keys());
 
     if (tokens.length === 0) {
       return {
@@ -143,33 +175,62 @@ export class NotificationsService {
         successCount: 0,
         failureCount: 0,
         invalidTokensRemoved: 0,
+        failureReasons: {},
       };
     }
 
     const messaging = this.firebaseAdminService.getMessagingOrThrow();
-    const response = await messaging.sendEachForMulticast({
-      tokens,
-      notification: {
-        title: message.title,
-        body: message.body,
-      },
-      data: this.normalizeData(message.data),
-      android: {
-        priority: "high",
-      },
-      apns: {
-        payload: {
-          aps: {
+    let successCount = 0;
+    let failureCount = 0;
+    const invalidTokens: string[] = [];
+    const failureReasons = new Map<string, number>();
+
+    for (const language of ["en", "es"] as const) {
+      const languageTokens = recipientGroups[language];
+      if (languageTokens.length === 0) {
+        continue;
+      }
+
+      const resolvedMessage = this.resolveMessageForLanguage(message, language);
+      const response = await messaging.sendEachForMulticast({
+        tokens: languageTokens,
+        notification: {
+          title: resolvedMessage.title,
+          body: resolvedMessage.body,
+        },
+        data: this.normalizeData(resolvedMessage.data),
+        android: {
+          priority: "high",
+          notification: {
+            channelId: "budgetapp_default_channel",
             sound: "default",
           },
         },
-      },
-    });
+        apns: {
+          payload: {
+            aps: {
+              sound: "default",
+            },
+          },
+        },
+      });
 
-    const invalidTokens = tokens.filter((token, index) => {
-      const errorCode = response.responses[index]?.error?.code;
-      return !!errorCode && INVALID_TOKEN_CODES.has(errorCode);
-    });
+      successCount += response.successCount;
+      failureCount += response.failureCount;
+
+      response.responses.forEach((delivery, index) => {
+        const errorCode = delivery.error?.code;
+        if (!errorCode) {
+          return;
+        }
+
+        failureReasons.set(errorCode, (failureReasons.get(errorCode) ?? 0) + 1);
+
+        if (INVALID_TOKEN_CODES.has(errorCode)) {
+          invalidTokens.push(languageTokens[index]);
+        }
+      });
+    }
 
     if (invalidTokens.length > 0) {
       await this.prisma.deviceToken.deleteMany({
@@ -183,10 +244,22 @@ export class NotificationsService {
 
     return {
       tokenCount: tokens.length,
-      successCount: response.successCount,
-      failureCount: response.failureCount,
+      successCount,
+      failureCount,
       invalidTokensRemoved: invalidTokens.length,
+      failureReasons: Object.fromEntries(failureReasons),
     };
+  }
+
+  private resolveMessageForLanguage(
+    message: NotificationMessageInput,
+    language: NotificationLanguage,
+  ): PushMessageInput {
+    if ("resolveMessage" in message) {
+      return message.resolveMessage(language);
+    }
+
+    return message;
   }
 
   private normalizeData(
@@ -203,16 +276,67 @@ export class NotificationsService {
     return entries.length > 0 ? Object.fromEntries(entries) : undefined;
   }
 
-  private buildSubscriptionReminderBody(
+  private buildSubscriptionReminderMessage(
     subscription: SubscriptionReminderInput,
-  ): string {
-    const amount = Number(subscription.cost).toFixed(2);
+    language: NotificationLanguage,
+  ): Pick<PushMessageInput, "title" | "body"> {
+    const amount = this.formatCurrency(
+      subscription.currency,
+      Number(subscription.cost),
+      language,
+    );
 
     if (subscription.daysRemaining <= 0) {
-      return `${subscription.name} is due today for ${subscription.currency} ${amount}.`;
+      if (language === "es") {
+        return {
+          title: `Pago pendiente hoy: ${subscription.name}`,
+          body: `${subscription.name} se cobra hoy por ${amount}.`,
+        };
+      }
+
+      return {
+        title: `Payment due today: ${subscription.name}`,
+        body: `${subscription.name} charges ${amount} today.`,
+      };
     }
 
-    return `${subscription.name} will charge ${subscription.currency} ${amount} in ${subscription.daysRemaining} day(s).`;
+    if (language === "es") {
+      return {
+        title: `Proximo pago: ${subscription.name}`,
+        body:
+          subscription.daysRemaining === 1
+            ? `${subscription.name} se cobrara ${amount} en 1 dia.`
+            : `${subscription.name} se cobrara ${amount} en ${subscription.daysRemaining} dias.`,
+      };
+    }
+
+    return {
+      title: `Upcoming payment: ${subscription.name}`,
+      body:
+        subscription.daysRemaining === 1
+          ? `${subscription.name} will charge ${amount} in 1 day.`
+          : `${subscription.name} will charge ${amount} in ${subscription.daysRemaining} days.`,
+    };
+  }
+
+  private formatCurrency(
+    currency: string,
+    amount: number,
+    language: NotificationLanguage,
+  ): string {
+    const locale = language === "es" ? "es-MX" : "en-US";
+
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        currencyDisplay: "code",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      return `${currency} ${amount.toFixed(2)}`;
+    }
   }
 
   private assertAdmin(currentUser: CurrentUserType) {
