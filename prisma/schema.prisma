@@ -140,6 +140,8 @@ model Category {
 model Expense {
   id                          String                @id @default(uuid())
   title                       String
+  merchantName                String?               @map("merchant_name")
+  locationLabel               String?               @map("location_label")
   cost                        Decimal               @db.Decimal(10, 2)
   currency                    String                @default("MXN")
   paymentMethod               PaymentMethod         @default(CASH)
@@ -168,6 +170,8 @@ model Expense {
 
   @@index([userId, date])
   @@index([userId, categoryId])
+  @@index([userId, locationLabel, date])
+  @@index([userId, merchantName, date])
   @@index([userId, isSubscription, date])
   @@index([userId, isInstallment, date])
   @@index([creditCardId])
@@ -223,6 +227,7 @@ model DeviceToken {
   id         String         @id @default(uuid())
   token      String         @unique
   platform   DevicePlatform
+  language   String         @default("en")
   userId     String
   lastSeenAt DateTime       @default(now())
   createdAt  DateTime       @default(now())

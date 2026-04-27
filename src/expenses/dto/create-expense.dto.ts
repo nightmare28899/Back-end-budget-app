@@ -70,6 +70,26 @@ export class CreateExpenseDto {
   note?: string;
 
   @ApiPropertyOptional({
+    example: "Starbucks",
+    description: "Merchant or shop name where the expense happened.",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimStringValue(value as unknown))
+  @IsString()
+  @MaxLength(120)
+  merchantName?: string;
+
+  @ApiPropertyOptional({
+    example: "Reforma 222, CDMX",
+    description: "Readable location label used for recurring suggestions.",
+  })
+  @IsOptional()
+  @Transform(({ value }) => trimStringValue(value as unknown))
+  @IsString()
+  @MaxLength(120)
+  locationLabel?: string;
+
+  @ApiPropertyOptional({
     example: true,
     description:
       "When true, the expense is stored as an installment schedule instead of a single payment.",

@@ -9,6 +9,7 @@ import { StorageService } from "../storage/storage.service";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
 import { QueryExpenseDto } from "./dto/query-expense.dto";
+import { LocationSuggestionQueryDto } from "./dto/location-suggestion-query.dto";
 import { InstallmentFrequency, PaymentMethod, Prisma } from "@prisma/client";
 import {
   formatDateOnly,
@@ -37,9 +38,19 @@ type ExpenseWithPresignedUrl = ExpenseWithCategory & {
 const MAX_SYNC_BATCH_SIZE = 200;
 const DEFAULT_EXPENSE_CURRENCY = "MXN";
 const DEFAULT_INSTALLMENT_FREQUENCY = InstallmentFrequency.MONTHLY;
+const DEFAULT_SUGGESTION_LIMIT = 5;
+const MAX_SUGGESTION_LOOKBACK = 300;
+const LOCATION_MATCH_TERMS = /\s+/g;
 
 function minDate(first: Date, second: Date) {
   return first.getTime() <= second.getTime() ? first : second;
+}
+
+function normalizeLookupTerm(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(LOCATION_MATCH_TERMS, " ");
 }
 
 @Injectable()
@@ -75,7 +86,10 @@ export class ExpensesService {
 
     const installmentPlan = this.buildInstallmentPlan(dto);
     if (installmentPlan) {
-      await this.entitlementsService.assertPremium(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(
+        userId,
+        "installment_expenses",
+      );
       return this.createInstallmentExpenses({
         userId,
         dto,
@@ -91,6 +105,8 @@ export class ExpensesService {
     return this.prisma.expense.create({
       data: {
         title: dto.title,
+        merchantName: dto.merchantName,
+        locationLabel: dto.locationLabel,
         cost: dto.cost,
         currency,
         paymentMethod,
@@ -209,7 +225,17 @@ export class ExpensesService {
     }
 
     if (query.q) {
-      where.title = { contains: query.q, mode: "insensitive" };
+      where.OR = [
+        { title: { contains: query.q, mode: "insensitive" } },
+        { note: { contains: query.q, mode: "insensitive" } },
+        { merchantName: { contains: query.q, mode: "insensitive" } },
+        { locationLabel: { contains: query.q, mode: "insensitive" } },
+        {
+          category: {
+            name: { contains: query.q, mode: "insensitive" },
+          },
+        },
+      ];
     }
 
     if (query.categoryId) {
@@ -264,6 +290,171 @@ export class ExpensesService {
     };
   }
 
+  async findLocationSuggestions(
+    userId: string,
+    query: LocationSuggestionQueryDto,
+  ) {
+    const locationLabel = query.locationLabel?.trim();
+    if (!locationLabel) {
+      return {
+        suggestions: [],
+      };
+    }
+
+    const normalizedLocation = normalizeLookupTerm(locationLabel);
+    const titleTerm = normalizeLookupTerm(query.q);
+    const suggestionLimit = Math.max(
+      1,
+      Math.min(query.limit ?? DEFAULT_SUGGESTION_LIMIT, 10),
+    );
+
+    const expenses = await this.prisma.expense.findMany({
+      where: {
+        userId,
+        ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+        OR: [
+          { locationLabel: { contains: locationLabel, mode: "insensitive" } },
+          { merchantName: { contains: locationLabel, mode: "insensitive" } },
+          { note: { contains: locationLabel, mode: "insensitive" } },
+        ],
+      },
+      select: {
+        title: true,
+        cost: true,
+        currency: true,
+        date: true,
+        merchantName: true,
+        locationLabel: true,
+        categoryId: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            icon: true,
+            color: true,
+          },
+        },
+      },
+      orderBy: {
+        date: "desc",
+      },
+      take: MAX_SUGGESTION_LOOKBACK,
+    });
+
+    const grouped = new Map<
+      string,
+      {
+        title: string;
+        categoryId: string | null;
+        categoryName: string | null;
+        categoryIcon: string | null;
+        categoryColor: string | null;
+        currency: string;
+        merchantName: string | null;
+        locationLabel: string | null;
+        occurrenceCount: number;
+        totalCost: number;
+        lastPurchasedAt: Date;
+      }
+    >();
+
+    for (const expense of expenses) {
+      const normalizedTitle = normalizeLookupTerm(expense.title);
+      if (!normalizedTitle) {
+        continue;
+      }
+      if (titleTerm && !normalizedTitle.includes(titleTerm)) {
+        continue;
+      }
+
+      const normalizedExpenseLocation = normalizeLookupTerm(
+        expense.locationLabel ?? expense.merchantName,
+      );
+      if (
+        normalizedLocation &&
+        normalizedExpenseLocation &&
+        !normalizedExpenseLocation.includes(normalizedLocation)
+      ) {
+        continue;
+      }
+
+      const key = `${normalizedTitle}::${expense.categoryId ?? "uncategorized"}::${expense.currency}`;
+      const current = grouped.get(key);
+
+      if (!current) {
+        grouped.set(key, {
+          title: expense.title,
+          categoryId: expense.categoryId ?? null,
+          categoryName: expense.category?.name ?? null,
+          categoryIcon: expense.category?.icon ?? null,
+          categoryColor: expense.category?.color ?? null,
+          currency: expense.currency,
+          merchantName: expense.merchantName ?? null,
+          locationLabel: expense.locationLabel ?? null,
+          occurrenceCount: 1,
+          totalCost: Number(expense.cost),
+          lastPurchasedAt: expense.date,
+        });
+        continue;
+      }
+
+      current.occurrenceCount += 1;
+      current.totalCost += Number(expense.cost);
+      if (expense.date.getTime() > current.lastPurchasedAt.getTime()) {
+        current.lastPurchasedAt = expense.date;
+      }
+      if (!current.locationLabel && expense.locationLabel) {
+        current.locationLabel = expense.locationLabel;
+      }
+      if (!current.merchantName && expense.merchantName) {
+        current.merchantName = expense.merchantName;
+      }
+    }
+
+    const now = Date.now();
+    const suggestions = Array.from(grouped.values())
+      .map((item) => {
+        const averageCost =
+          item.occurrenceCount > 0 ? item.totalCost / item.occurrenceCount : 0;
+        const recencyDays = Math.max(
+          0,
+          Math.round(
+            (now - item.lastPurchasedAt.getTime()) / (1000 * 60 * 60 * 24),
+          ),
+        );
+        const recencyBoost = 1 / (1 + recencyDays / 14);
+        const score = item.occurrenceCount * 10 + recencyBoost * 5;
+
+        return {
+          title: item.title,
+          categoryId: item.categoryId,
+          categoryName: item.categoryName,
+          categoryIcon: item.categoryIcon,
+          categoryColor: item.categoryColor,
+          currency: item.currency,
+          merchantName: item.merchantName,
+          locationLabel: item.locationLabel,
+          occurrenceCount: item.occurrenceCount,
+          averageCost: this.roundMoney(averageCost),
+          lastPurchasedAt: item.lastPurchasedAt.toISOString(),
+          score: this.roundMoney(score),
+        };
+      })
+      .sort((a, b) => {
+        if (a.score !== b.score) {
+          return b.score - a.score;
+        }
+
+        return b.lastPurchasedAt.localeCompare(a.lastPurchasedAt);
+      })
+      .slice(0, suggestionLimit);
+
+    return {
+      locationLabel,
+      suggestions,
+    };
+  }
+
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {
     const expense = await this.prisma.expense.findFirst({
       where: { id, userId },
@@ -313,7 +504,10 @@ export class ExpensesService {
     const shouldUseInstallmentPlan =
       dto.isInstallment ?? existing.isInstallment;
     if (shouldUseInstallmentPlan) {
-      await this.entitlementsService.assertPremium(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(
+        userId,
+        "installment_expenses",
+      );
       const installmentPlan = this.buildInstallmentPlan(dto, {
         totalAmount:
           dto.cost ?? Number(existing.installmentTotalAmount ?? existing.cost),
@@ -452,7 +646,10 @@ export class ExpensesService {
 
     const includesInstallments = expenses.some((dto) => dto.isInstallment);
     if (includesInstallments) {
-      await this.entitlementsService.assertPremium(userId, "installment_expenses");
+      await this.entitlementsService.assertPremium(
+        userId,
+        "installment_expenses",
+      );
     }
 
     const results = [];
@@ -577,6 +774,8 @@ export class ExpensesService {
         const created = await tx.expense.create({
           data: {
             title: input.dto.title,
+            merchantName: input.dto.merchantName,
+            locationLabel: input.dto.locationLabel,
             cost: scheduleItem.amount,
             currency: input.currency,
             paymentMethod: input.paymentMethod,
@@ -642,6 +841,14 @@ export class ExpensesService {
         const created = await tx.expense.create({
           data: {
             title: input.dto.title ?? input.existing.title,
+            merchantName:
+              input.dto.merchantName !== undefined
+                ? input.dto.merchantName
+                : (input.existing.merchantName ?? undefined),
+            locationLabel:
+              input.dto.locationLabel !== undefined
+                ? input.dto.locationLabel
+                : (input.existing.locationLabel ?? undefined),
             cost: scheduleItem.amount,
             currency: input.currency,
             paymentMethod: input.paymentMethod,
@@ -707,6 +914,14 @@ export class ExpensesService {
       return tx.expense.create({
         data: {
           title: input.dto.title ?? input.existing.title,
+          merchantName:
+            input.dto.merchantName !== undefined
+              ? input.dto.merchantName
+              : (input.existing.merchantName ?? undefined),
+          locationLabel:
+            input.dto.locationLabel !== undefined
+              ? input.dto.locationLabel
+              : (input.existing.locationLabel ?? undefined),
           cost:
             input.dto.cost ??
             Number(
