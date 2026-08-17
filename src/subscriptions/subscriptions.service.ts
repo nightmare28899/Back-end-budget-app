@@ -75,6 +75,7 @@ export class SubscriptionsService {
         creditCardId: dto.creditCardId,
       },
     );
+    const categoryId = await this.resolveCategoryId(userId, dto.categoryId);
 
     const subscription = await this.prisma.subscription.create({
       data: {
@@ -90,9 +91,11 @@ export class SubscriptionsService {
         isActive: dto.isActive ?? true,
         logoUrl: dto.logoUrl,
         hexColor: dto.hexColor,
+        categoryId,
       },
       include: {
         creditCard: { select: creditCardPublicSelect },
+        category: true,
       },
     });
 
@@ -106,6 +109,7 @@ export class SubscriptionsService {
       where: { userId },
       include: {
         creditCard: { select: creditCardPublicSelect },
+        category: true,
       },
       orderBy: { nextPaymentDate: "asc" },
     });
@@ -116,6 +120,7 @@ export class SubscriptionsService {
       where: { id, userId },
       include: {
         creditCard: { select: creditCardPublicSelect },
+        category: true,
       },
     });
 
@@ -150,6 +155,10 @@ export class SubscriptionsService {
         existingCreditCardId: existing.creditCardId ?? null,
       },
     );
+    const categoryId =
+      dto.categoryId !== undefined
+        ? await this.resolveCategoryId(userId, dto.categoryId)
+        : existing.categoryId;
 
     return this.prisma.subscription.update({
       where: { id },
@@ -165,9 +174,11 @@ export class SubscriptionsService {
         isActive: dto.isActive,
         logoUrl: dto.logoUrl,
         hexColor: dto.hexColor,
+        categoryId,
       },
       include: {
         creditCard: { select: creditCardPublicSelect },
+        category: true,
       },
     });
   }
@@ -288,6 +299,23 @@ export class SubscriptionsService {
       default:
         return 1;
     }
+  }
+
+  private async resolveCategoryId(userId: string, categoryId?: string) {
+    if (!categoryId) {
+      return null;
+    }
+
+    const category = await this.prisma.category.findFirst({
+      where: { id: categoryId, userId },
+      select: { id: true },
+    });
+
+    if (!category) {
+      throw new BadRequestException("Category not found");
+    }
+
+    return category.id;
   }
 
   private roundMoney(value: number) {

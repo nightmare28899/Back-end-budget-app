@@ -88,6 +88,18 @@ export class SubscriptionsWorkerService {
     const dueSubscriptions = await this.prisma.subscription.findMany({
       where,
       orderBy: { nextPaymentDate: "asc" },
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        cost: true,
+        currency: true,
+        paymentMethod: true,
+        creditCardId: true,
+        categoryId: true,
+        nextPaymentDate: true,
+        billingCycle: true,
+      },
     });
 
     const results: ProcessSubscriptionsResultItem[] = [];
@@ -117,6 +129,7 @@ export class SubscriptionsWorkerService {
             currency: subscription.currency,
             paymentMethod: subscription.paymentMethod,
             creditCardId: subscription.creditCardId,
+            categoryId: subscription.categoryId,
             date: dueDate,
             note: `Auto-generated from subscription ${subscription.name}`,
             isSubscription: true,

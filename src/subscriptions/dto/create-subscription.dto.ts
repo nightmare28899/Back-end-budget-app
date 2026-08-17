@@ -116,4 +116,11 @@ export class CreateSubscriptionDto {
   @IsString()
   @Matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)
   hexColor?: string;
+
+  @ApiPropertyOptional({
+    description: "Category assigned to generated subscription expenses.",
+  })
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
 }

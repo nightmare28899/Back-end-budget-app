@@ -62,6 +62,7 @@ export class CategoriesService {
       { name: "Health", icon: "💊", color: "#FFEAA7" },
       { name: "Bills", icon: "📄", color: "#DDA0DD" },
       { name: "Other", icon: "📦", color: "#95A5A6" },
+      { name: "Suscripción", icon: "🔁", color: "#8B5CF6" },
     ];
 
     const existing = await this.prisma.category.findMany({
