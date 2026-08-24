@@ -3,13 +3,13 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
   Max,
   MaxLength,
   Min,
 } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { trimStringValue } from "../../common/dto/string-transformers";
+import { IsCategoryId } from "../../common/dto/category-id.decorator";
 
 export class LocationSuggestionQueryDto {
   @ApiPropertyOptional({
@@ -25,7 +25,7 @@ export class LocationSuggestionQueryDto {
     description: "Optional category restriction",
   })
   @IsOptional()
-  @IsUUID()
+  @IsCategoryId()
   categoryId?: string;
 
   @ApiPropertyOptional({

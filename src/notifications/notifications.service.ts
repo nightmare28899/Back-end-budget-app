@@ -3,6 +3,7 @@ import { DevicePlatform, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import { FirebaseAdminService } from "../firebase/firebase-admin.service";
+import type { SendResponse } from "firebase-admin/messaging";
 import { RegisterDeviceTokenDto } from "./dto/register-device-token.dto";
 import { RemoveDeviceTokenDto } from "./dto/remove-device-token.dto";
 import { SendTestPushDto } from "./dto/send-test-push.dto";
@@ -218,7 +219,7 @@ export class NotificationsService {
       successCount += response.successCount;
       failureCount += response.failureCount;
 
-      response.responses.forEach((delivery, index) => {
+      response.responses.forEach((delivery: SendResponse, index: number) => {
         const errorCode = delivery.error?.code;
         if (!errorCode) {
           return;

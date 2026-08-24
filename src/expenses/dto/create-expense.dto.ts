@@ -19,6 +19,7 @@ import {
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
 import { PAYMENT_METHOD_VALUES } from "../../common/payments/payment-method.utils";
+import { IsCategoryId } from "../../common/dto/category-id.decorator";
 import { INSTALLMENT_FREQUENCY_VALUES } from "../installments/expense-installments.util";
 
 export class CreateExpenseDto {
@@ -146,10 +147,11 @@ export class CreateExpenseDto {
 
   @ApiPropertyOptional({
     description: "Existing category ID. Required if categoryName is not sent.",
+    nullable: true,
   })
   @IsOptional()
-  @IsUUID()
-  categoryId?: string;
+  @IsCategoryId()
+  categoryId?: string | null;
 
   @ApiPropertyOptional({
     description: "Category name to create/use when categoryId is not provided.",

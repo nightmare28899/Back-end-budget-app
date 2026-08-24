@@ -53,7 +53,7 @@ export class FirebaseAdminService {
       return this.firebaseApp;
     }
 
-    const existing = getApps().find((item) => item.name === FIREBASE_APP_NAME);
+    const existing = getApps().find((item: App) => item.name === FIREBASE_APP_NAME);
     if (existing) {
       this.firebaseApp = existing;
       return this.firebaseApp;
