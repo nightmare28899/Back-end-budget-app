@@ -3,7 +3,6 @@ import {
   IsOptional,
   IsString,
   IsDateString,
-  IsUUID,
   MaxLength,
   IsInt,
   Min,
@@ -11,6 +10,7 @@ import {
 } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { trimStringValue } from "../../common/dto/string-transformers";
+import { IsCategoryId } from "../../common/dto/category-id.decorator";
 
 export class QueryExpenseDto {
   @ApiPropertyOptional({ example: "2026-02-01" })
@@ -32,7 +32,7 @@ export class QueryExpenseDto {
 
   @ApiPropertyOptional({ description: "Category ID filter" })
   @IsOptional()
-  @IsUUID()
+  @IsCategoryId()
   categoryId?: string;
 
   @ApiPropertyOptional({ example: 1, default: 1, minimum: 1 })

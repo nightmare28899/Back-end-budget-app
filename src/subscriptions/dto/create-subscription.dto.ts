@@ -20,6 +20,7 @@ import {
   trimUpperCaseStringValue,
 } from "../../common/dto/string-transformers";
 import { PAYMENT_METHOD_VALUES } from "../../common/payments/payment-method.utils";
+import { IsCategoryId } from "../../common/dto/category-id.decorator";
 
 export const BILLING_CYCLE_VALUES = [
   "DAILY",
@@ -119,8 +120,9 @@ export class CreateSubscriptionDto {
 
   @ApiPropertyOptional({
     description: "Category assigned to generated subscription expenses.",
+    nullable: true,
   })
   @IsOptional()
-  @IsUUID()
-  categoryId?: string;
+  @IsCategoryId()
+  categoryId?: string | null;
 }

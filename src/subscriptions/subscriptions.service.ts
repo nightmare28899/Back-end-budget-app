@@ -301,7 +301,7 @@ export class SubscriptionsService {
     }
   }
 
-  private async resolveCategoryId(userId: string, categoryId?: string) {
+  private async resolveCategoryId(userId: string, categoryId?: string | null) {
     if (!categoryId) {
       return null;
     }
