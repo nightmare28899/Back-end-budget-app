@@ -11,6 +11,8 @@ import {
   UseInterceptors,
   UploadedFile,
   ParseUUIDPipe,
+  HttpCode,
+  HttpStatus,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import {
@@ -229,15 +231,15 @@ export class UsersController {
 
   @Delete("me")
   @ApiOperation({
-    summary: "Disable current user account (soft delete with deletedAt flag)",
+    summary: "Permanently delete current user account and all owned data",
   })
-  async disableMe(@CurrentUser() user: CurrentUserType) {
-    const disabledUser = await this.usersService.disable(user.id, user);
-
-    return {
-      message: "User disabled successfully",
-      user: disabledUser,
-    };
+  @ApiResponse({
+    status: 204,
+    description: "Account and all owned data permanently deleted",
+  })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteMe(@CurrentUser() user: CurrentUserType) {
+    await this.usersService.deleteAccount(user.id);
   }
 
   @Delete(":id")

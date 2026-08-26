@@ -34,6 +34,21 @@ enum DevicePlatform {
   IOS
 }
 
+enum EntitlementStore {
+  APPLE
+  GOOGLE
+  ADMIN
+}
+
+enum EntitlementStatus {
+  ACTIVE
+  GRACE_PERIOD
+  BILLING_RETRY
+  CANCELED
+  EXPIRED
+  REFUNDED
+}
+
 model User {
   id                   String          @id @default(uuid())
   email                String          @unique
@@ -51,6 +66,11 @@ model User {
   updatedAt            DateTime        @updatedAt
   isActive             Boolean         @default(true)
   isPremium            Boolean         @default(false)
+  entitlementTier      String          @default("free") @map("entitlement_tier")
+  entitlementExpiresAt  DateTime?       @map("entitlement_expires_at")
+  entitlementStore     EntitlementStore? @map("entitlement_store")
+  originalTransactionId String?         @map("original_transaction_id")
+  entitlementStatus    EntitlementStatus @default(EXPIRED) @map("entitlement_status")
   weeklyReportEnabled  Boolean         @default(true) @map("weekly_report_enabled")
   monthlyReportEnabled Boolean         @default(false) @map("monthly_report_enabled")
   termsAcceptedAt      DateTime?       @map("terms_accepted_at")
@@ -65,8 +85,23 @@ model User {
   deviceTokens         DeviceToken[]
   authSessions         AuthSession[]
   reportHistory        ReportHistory[]
+  accountDeletionRequests AccountDeletionRequest[]
 
   @@map("users")
+}
+
+model AccountDeletionRequest {
+  id        String   @id @default(uuid())
+  email     String
+  reason    String?
+  status    String   @default("requested")
+  createdAt DateTime @default(now()) @map("created_at")
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([status, createdAt])
+  @@map("account_deletion_requests")
 }
 
 model AuthSession {

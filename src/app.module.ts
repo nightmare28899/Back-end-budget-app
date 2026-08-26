@@ -18,6 +18,7 @@ import { IntakeModule } from "./intake/intake.module";
 import { CreditCardsModule } from "./credit-cards/credit-cards.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { IncomesModule } from "./incomes/incomes.module";
+import { LegalModule } from "./legal/legal.module";
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { IncomesModule } from "./incomes/incomes.module";
     HistoryModule,
     SavingsModule,
     IntakeModule,
+    LegalModule,
   ],
   providers: [
     {
