@@ -206,6 +206,42 @@ export class UsersService {
     });
   }
 
+  /**
+   * Permanently deletes the authenticated user's account.
+   *
+   * All user-owned database records have ON DELETE CASCADE relations. The
+   * avatar lives outside the database, so it is removed separately after the
+   * transaction. Storage cleanup is best-effort: an orphaned object must not
+   * prevent the account and its financial data from being deleted.
+   */
+  async deleteAccount(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, avatarUrl: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.delete({ where: { id: userId } });
+    });
+
+    if (user.avatarUrl) {
+      try {
+        await this.storageService.deleteFile(user.avatarUrl);
+      } catch (error) {
+        this.logger.error(
+          `[privacy] account deleted but avatar cleanup failed userId=${userId} avatarKey=${user.avatarUrl}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    this.logger.log(`[privacy] permanently deleted account userId=${userId}`);
+  }
+
   private async updateUser(
     userId: string,
     currentUser: CurrentUserType,
