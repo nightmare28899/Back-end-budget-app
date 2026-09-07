@@ -206,6 +206,64 @@ export class UsersService {
     });
   }
 
+  async deletePermanently(userId: string, currentUser: CurrentUserType) {
+    if (currentUser.id !== userId) {
+      throw new ForbiddenException(
+        "You can only permanently delete your own account",
+      );
+    }
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        avatarUrl: true,
+        expenses: { select: { imageUrl: true } },
+        savingsGoals: { select: { id: true } },
+      },
+    });
+
+    if (!existingUser) {
+      throw new NotFoundException("User not found");
+    }
+
+    const storedFiles = [
+      existingUser.avatarUrl,
+      ...existingUser.expenses.map((expense) => expense.imageUrl),
+    ].filter((value): value is string => Boolean(value));
+
+    for (const objectName of new Set(storedFiles)) {
+      try {
+        await this.storageService.deleteFile(objectName);
+      } catch (error) {
+        this.logger.warn(
+          `Could not delete stored user file before account deletion: ${objectName}`,
+        );
+        console.error(error);
+      }
+    }
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.authSession.deleteMany({ where: { userId } });
+      await transaction.deviceToken.deleteMany({ where: { userId } });
+      await transaction.reportHistory.deleteMany({ where: { userId } });
+      await transaction.expense.deleteMany({ where: { userId } });
+      await transaction.income.deleteMany({ where: { userId } });
+      await transaction.subscription.deleteMany({ where: { userId } });
+      await transaction.creditCard.deleteMany({ where: { userId } });
+      await transaction.category.deleteMany({ where: { userId } });
+      await transaction.savingsTransaction.deleteMany({
+        where: {
+          goalId: { in: existingUser.savingsGoals.map((goal) => goal.id) },
+        },
+      });
+      await transaction.savingsGoal.deleteMany({ where: { userId } });
+      await transaction.user.delete({ where: { id: userId } });
+    });
+
+    this.logger.log(`[security] users.deletePermanently userId=${userId}`);
+  }
+
   private async updateUser(
     userId: string,
     currentUser: CurrentUserType,

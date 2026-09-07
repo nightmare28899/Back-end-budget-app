@@ -37,6 +37,7 @@ lerna-debug.log*
 .vscode/
 *.swp
 *.swo
+*.atl
 
 # OS files
 .DS_Store

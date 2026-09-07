@@ -229,14 +229,13 @@ export class UsersController {
 
   @Delete("me")
   @ApiOperation({
-    summary: "Disable current user account (soft delete with deletedAt flag)",
+    summary: "Permanently delete current user account and associated data",
   })
-  async disableMe(@CurrentUser() user: CurrentUserType) {
-    const disabledUser = await this.usersService.disable(user.id, user);
+  async deleteMe(@CurrentUser() user: CurrentUserType) {
+    await this.usersService.deletePermanently(user.id, user);
 
     return {
-      message: "User disabled successfully",
-      user: disabledUser,
+      message: "User account and associated data deleted permanently",
     };
   }
 

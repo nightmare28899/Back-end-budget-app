@@ -191,6 +191,14 @@ export class AuthService {
       });
 
       if (!user) {
+        if (dto.existingUserOnly) {
+          this.logSecurityEvent("warn", "auth.google.existing_user_required", {
+            email: this.maskEmail(email),
+          });
+          throw new UnauthorizedException(
+            "Google sign-in is limited to existing accounts",
+          );
+        }
         const generatedPassword = randomBytes(32).toString("hex");
         const hashedPassword = await bcrypt.hash(generatedPassword, 10);
         const avatarUrl = await this.importGoogleAvatar(googleAvatarUrl, email);
