@@ -34,6 +34,71 @@ enum DevicePlatform {
   IOS
 }
 
+enum StatementImportStatus {
+  UPLOADED
+  PARSED
+  NEEDS_REVIEW
+  CONFIRMED
+  REVERTED
+  FAILED
+}
+
+enum StatementSourceFormat {
+  PDF
+}
+
+enum StatementSection {
+  RECONCILIATION
+  PAYMENT_TARGET
+  CURRENT_CHARGES
+  FINANCING_PLAN
+  CFDI
+  OTHER
+}
+
+enum StatementRowKind {
+  CHARGE
+  PAYMENT
+  CREDIT
+  INTEREST
+  TAX
+  REFINANCED_PRINCIPAL
+  CFDI
+  UNKNOWN
+}
+
+enum StatementRowDecision {
+  PENDING
+  INCLUDE_EXPENSE
+  EXCLUDE
+  INFO_ONLY
+}
+
+enum StatementReconciliationStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+enum StatementInstrumentKind {
+  PHYSICAL
+  DIGITAL
+  UNKNOWN
+}
+
+enum StatementFinancingType {
+  NO_INTEREST
+  INTEREST_BEARING
+  REFINANCED
+}
+
+enum StatementPaymentTargetKind {
+  MINIMUM
+  MINIMUM_PLUS_INSTALLMENTS
+  NO_INTEREST
+  OTHER
+}
+
 model User {
   id                   String          @id @default(uuid())
   email                String          @unique
@@ -65,6 +130,7 @@ model User {
   deviceTokens         DeviceToken[]
   authSessions         AuthSession[]
   reportHistory        ReportHistory[]
+  statementImports     StatementImport[]
 
   @@map("users")
 }
@@ -117,6 +183,9 @@ model CreditCard {
   updatedAt     DateTime       @updatedAt
   expenses      Expense[]
   subscriptions Subscription[]
+  statementImports StatementImport[]             @relation("StatementImportCreditCard")
+  statementRows    StatementRow[]                @relation("StatementRowCreditCard")
+  statementInstruments StatementInstrumentSnapshot[] @relation("StatementInstrumentCreditCard")
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isActive, name])
@@ -133,6 +202,7 @@ model Category {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expenses     Expense[]
   subscriptions Subscription[]
+  statementRows StatementRow[]
 
   @@unique([userId, name])
   @@map("categories")
@@ -149,6 +219,7 @@ model Expense {
   creditCardId                String?
   isSubscription              Boolean               @default(false)
   subscriptionId              String?
+  statementRowId              String?               @unique
   isInstallment               Boolean               @default(false)
   installmentGroupId          String?
   installmentCount            Int?
@@ -167,6 +238,7 @@ model Expense {
   category                    Category?             @relation(fields: [categoryId], references: [id])
   creditCard                  CreditCard?           @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   subscription                Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  statementRow                StatementRow?         @relation(fields: [statementRowId], references: [id], onDelete: SetNull)
   user                        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
@@ -179,6 +251,161 @@ model Expense {
   @@index([subscriptionId])
   @@index([installmentGroupId])
   @@map("expenses")
+}
+
+model StatementImport {
+  id              String                @id @default(uuid())
+  userId          String
+  creditCardId    String?
+  sourceFormat    StatementSourceFormat @default(PDF)
+  sourceFileName  String?
+  sourceMimeType  String
+  sourceSizeBytes Int
+  sourceSha256    String
+  sourceObjectKey String?
+  status          StatementImportStatus @default(UPLOADED)
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  parserVersion   String?
+  version         Int                   @default(1)
+  warningCount    Int                   @default(0)
+  failureCode     String?
+  failureMessage  String?
+  parsedAt        DateTime?
+  confirmedAt     DateTime?
+  revertedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard      CreditCard?           @relation("StatementImportCreditCard", fields: [creditCardId], references: [id], onDelete: SetNull)
+  rows            StatementRow[]
+  reconciliation  StatementReconciliation?
+  paymentTargets  StatementPaymentTarget[]
+  financingPlans  StatementFinancingPlan[]
+  instruments     StatementInstrumentSnapshot[]
+
+  @@unique([userId, sourceSha256])
+  @@index([userId, status, createdAt])
+  @@index([creditCardId])
+  @@map("statement_imports")
+}
+
+model StatementRow {
+  id                 String               @id @default(uuid())
+  statementImportId  String
+  occurrenceKey      String
+  section            StatementSection
+  sourceRowNumber    Int?
+  position           Int
+  transactionDate    DateTime?
+  description        String
+  merchantName       String?
+  amount             Decimal              @db.Decimal(12, 2)
+  currency           String               @default("MXN")
+  kind               StatementRowKind
+  decision           StatementRowDecision @default(PENDING)
+  categoryId         String?
+  linkedCreditCardId String?
+  financingPlanId    String?
+  warningCodes       Json?
+  rawText             String?
+  decisionNote       String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  statementImport    StatementImport      @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  category           Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  linkedCreditCard   CreditCard?          @relation("StatementRowCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
+  financingPlan      StatementFinancingPlan? @relation(fields: [financingPlanId], references: [id], onDelete: SetNull)
+  expense            Expense?
+
+  @@unique([statementImportId, occurrenceKey])
+  @@index([statementImportId, decision, position])
+  @@index([categoryId])
+  @@index([linkedCreditCardId])
+  @@index([financingPlanId])
+  @@map("statement_rows")
+}
+
+model StatementReconciliation {
+  id                String                        @id @default(uuid())
+  statementImportId String                        @unique
+  openingBalance    Decimal                       @db.Decimal(12, 2)
+  chargesTotal      Decimal                       @db.Decimal(12, 2)
+  paymentsTotal     Decimal                       @db.Decimal(12, 2)
+  creditsTotal      Decimal                       @db.Decimal(12, 2)
+  closingBalance    Decimal                       @db.Decimal(12, 2)
+  difference        Decimal                       @db.Decimal(12, 2)
+  status            StatementReconciliationStatus @default(PENDING)
+  message           String?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+  statementImport   StatementImport               @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+
+  @@map("statement_reconciliations")
+}
+
+model StatementPaymentTarget {
+  id                String                     @id @default(uuid())
+  statementImportId String
+  kind              StatementPaymentTargetKind
+  label             String
+  amount            Decimal                    @db.Decimal(12, 2)
+  currency          String                     @default("MXN")
+  dueDate           DateTime?
+  sourceRowNumber   Int?
+  position          Int
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  statementImport   StatementImport            @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+
+  @@unique([statementImportId, position], map: "statement_targets_import_position_key")
+  @@index([statementImportId, kind])
+  @@map("statement_payment_targets")
+}
+
+model StatementInstrumentSnapshot {
+  id                 String                  @id @default(uuid())
+  statementImportId  String
+  label              String
+  kind               StatementInstrumentKind @default(UNKNOWN)
+  last4              String?
+  linkedCreditCardId String?
+  position           Int
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  statementImport    StatementImport         @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  linkedCreditCard   CreditCard?             @relation("StatementInstrumentCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
+  financingPlans     StatementFinancingPlan[]
+
+  @@unique([statementImportId, position], map: "statement_instruments_import_position_key")
+  @@index([linkedCreditCardId])
+  @@map("statement_instrument_snapshots")
+}
+
+model StatementFinancingPlan {
+  id                   String                 @id @default(uuid())
+  statementImportId    String
+  instrumentSnapshotId String?
+  type                 StatementFinancingType
+  merchantName         String?
+  purchaseDate         DateTime?
+  originalAmount       Decimal?               @db.Decimal(12, 2)
+  installmentAmount    Decimal?               @db.Decimal(12, 2)
+  installmentNumber    Int?
+  installmentCount     Int?
+  remainingAmount      Decimal?               @db.Decimal(12, 2)
+  currency             String                 @default("MXN")
+  sourceRowNumber      Int?
+  position             Int
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  statementImport      StatementImport        @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  instrumentSnapshot   StatementInstrumentSnapshot? @relation(fields: [instrumentSnapshotId], references: [id], onDelete: SetNull)
+  rows                 StatementRow[]
+
+  @@unique([statementImportId, position], map: "statement_plans_import_position_key")
+  @@index([instrumentSnapshotId])
+  @@map("statement_financing_plans")
 }
 
 model Income {
