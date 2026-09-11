@@ -136,13 +136,15 @@ model User {
 }
 
 model AuthSession {
-  id                    String    @id @default(uuid())
-  userId                String
-  currentRefreshTokenId String    @map("current_refresh_token_id")
-  revokedAt             DateTime? @map("revoked_at")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                        String    @id @default(uuid())
+  userId                    String
+  currentRefreshTokenId     String    @map("current_refresh_token_id")
+  previousRefreshTokenId    String?   @map("previous_refresh_token_id")
+  previousRefreshTokenExpiresAt DateTime? @map("previous_refresh_token_expires_at")
+  revokedAt                 DateTime? @map("revoked_at")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
+  user                      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([revokedAt])

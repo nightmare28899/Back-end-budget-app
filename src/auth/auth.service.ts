@@ -53,10 +53,12 @@ interface RefreshJwtPayload extends JwtPayload {
 interface AuthResponseOptions {
   sessionId?: string;
   previousRefreshTokenId?: string;
+  reuseCurrentRefreshTokenId?: string;
 }
 
 const DEFAULT_AUTH_SESSION_RETENTION_DAYS = 30;
 const DEFAULT_REFRESH_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_REFRESH_GRACE_MS = 30 * 1000;
 const CURRENT_TERMS_VERSION = "2026-04-06";
 
 @Injectable()
@@ -288,6 +290,8 @@ export class AuthService {
       const isLegacyRefreshToken =
         !payload.sid && !payload.jti && payload.type === undefined;
 
+      let sessionOptions: AuthResponseOptions | undefined;
+
       if (!isLegacyRefreshToken) {
         if (!payload.sid || !payload.jti || payload.type !== "refresh") {
           this.logSecurityEvent("warn", "auth.refresh.invalid_claims", {
@@ -296,7 +300,23 @@ export class AuthService {
           throw new UnauthorizedException("Invalid refresh token");
         }
 
-        await this.assertActiveSession(payload.sub, payload.sid, payload.jti);
+        const sessionState = await this.assertActiveSession(
+          payload.sub,
+          payload.sid,
+          payload.jti,
+        );
+
+        // A concurrent duplicate refresh call (e.g. two Server Actions racing
+        // right after the access token expired) presents the just-rotated
+        // previous token. Re-issue tokens for the session's current state
+        // instead of rotating again, so the loser of the race doesn't get an
+        // "Invalid refresh token" error and wipe out the winner's cookies.
+        sessionOptions = sessionState.isGraceReplay
+          ? {
+              sessionId: payload.sid,
+              reuseCurrentRefreshTokenId: sessionState.activeRefreshTokenId,
+            }
+          : { sessionId: payload.sid, previousRefreshTokenId: payload.jti };
       }
 
       if (user.deletedAt) {
@@ -307,12 +327,7 @@ export class AuthService {
         return this.createAuthResponse(
           await this.restoreDeletedUser(user.id),
           "Session renewed successfully",
-          isLegacyRefreshToken
-            ? undefined
-            : {
-                sessionId: payload.sid,
-                previousRefreshTokenId: payload.jti,
-              },
+          sessionOptions,
         );
       }
 
@@ -323,12 +338,7 @@ export class AuthService {
       return this.createAuthResponse(
         user,
         "Session renewed successfully",
-        isLegacyRefreshToken
-          ? undefined
-          : {
-              sessionId: payload.sid,
-              previousRefreshTokenId: payload.jti,
-            },
+        sessionOptions,
       );
     } catch (error) {
       if (error instanceof UnauthorizedException) {
@@ -511,6 +521,15 @@ export class AuthService {
     email: string,
     options?: AuthResponseOptions,
   ) {
+    if (options?.reuseCurrentRefreshTokenId && options.sessionId) {
+      return this.generateTokens(
+        userId,
+        email,
+        options.sessionId,
+        options.reuseCurrentRefreshTokenId,
+      );
+    }
+
     const refreshTokenId = randomUUID();
 
     let sessionId = options?.sessionId;
@@ -528,6 +547,10 @@ export class AuthService {
         },
         data: {
           currentRefreshTokenId: refreshTokenId,
+          previousRefreshTokenId: options?.previousRefreshTokenId ?? null,
+          previousRefreshTokenExpiresAt: options?.previousRefreshTokenId
+            ? new Date(Date.now() + this.getRefreshGraceMs())
+            : null,
         },
       });
 
@@ -550,30 +573,58 @@ export class AuthService {
     return this.generateTokens(userId, email, sessionId, refreshTokenId);
   }
 
+  private getRefreshGraceMs() {
+    const rawValue = this.configService.get<string>(
+      "JWT_REFRESH_GRACE",
+      "30s",
+    );
+    return this.parseDurationToMs(rawValue) ?? DEFAULT_REFRESH_GRACE_MS;
+  }
+
   private async assertActiveSession(
     userId: string,
     sessionId: string,
     refreshTokenId: string,
-  ) {
+  ): Promise<{ activeRefreshTokenId: string; isGraceReplay: boolean }> {
     const session = await this.prisma.authSession.findFirst({
       where: {
         id: sessionId,
         userId,
-        currentRefreshTokenId: refreshTokenId,
         revokedAt: null,
       },
       select: {
-        id: true,
+        currentRefreshTokenId: true,
+        previousRefreshTokenId: true,
+        previousRefreshTokenExpiresAt: true,
       },
     });
 
-    if (!session) {
-      this.logSecurityEvent("warn", "auth.session.invalid", {
+    if (session?.currentRefreshTokenId === refreshTokenId) {
+      return { activeRefreshTokenId: refreshTokenId, isGraceReplay: false };
+    }
+
+    const withinGrace =
+      session !== null &&
+      session.previousRefreshTokenId === refreshTokenId &&
+      session.previousRefreshTokenExpiresAt !== null &&
+      session.previousRefreshTokenExpiresAt.getTime() > Date.now();
+
+    if (withinGrace) {
+      this.logSecurityEvent("log", "auth.refresh.grace_replay", {
         userId,
         sessionId,
       });
-      throw new UnauthorizedException("Invalid refresh token");
+      return {
+        activeRefreshTokenId: session.currentRefreshTokenId,
+        isGraceReplay: true,
+      };
     }
+
+    this.logSecurityEvent("warn", "auth.session.invalid", {
+      userId,
+      sessionId,
+    });
+    throw new UnauthorizedException("Invalid refresh token");
   }
 
   private async revokeSession(userId: string, sessionId: string) {

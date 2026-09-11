@@ -120,3 +120,97 @@ describe("AuthService Google authentication", () => {
     ).rejects.toThrow("Google account email is not verified");
   });
 });
+
+interface AuthSessionRow {
+  currentRefreshTokenId: string;
+  previousRefreshTokenId: string | null;
+  previousRefreshTokenExpiresAt: Date | null;
+}
+
+function makeRefreshService(session: AuthSessionRow) {
+  const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+  const prisma = {
+    user: { findUnique: jest.fn().mockResolvedValue(activeUser) },
+    authSession: {
+      findFirst: jest.fn().mockResolvedValue(session),
+      updateMany,
+    },
+  };
+
+  const jwtService = {
+    verify: jest.fn().mockReturnValue({
+      sub: activeUser.id,
+      email: activeUser.email,
+      sid: "session-1",
+      jti: "current-jti",
+      type: "refresh",
+    }),
+    signAsync: jest.fn().mockResolvedValue("signed-token"),
+  };
+
+  const config = {
+    get: jest.fn((key: string, fallback?: string) => fallback ?? "secret"),
+  };
+
+  const service = new AuthService(
+    prisma as unknown as PrismaService,
+    jwtService as unknown as JwtService,
+    config as unknown as ConfigService,
+    {} as unknown as StorageService,
+    {} as unknown as FirebaseAdminService,
+  );
+
+  return { service, updateMany };
+}
+
+describe("AuthService refreshToken concurrent rotation", () => {
+  it("rotates the refresh token on a normal refresh call", async () => {
+    const { service, updateMany } = makeRefreshService({
+      currentRefreshTokenId: "current-jti",
+      previousRefreshTokenId: null,
+      previousRefreshTokenExpiresAt: null,
+    });
+
+    await expect(service.refreshToken("token")).resolves.toMatchObject({
+      isAuthenticated: true,
+    });
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a concurrent duplicate refresh using the just-rotated previous token within the grace window", async () => {
+    const { service, updateMany } = makeRefreshService({
+      currentRefreshTokenId: "new-jti",
+      previousRefreshTokenId: "current-jti",
+      previousRefreshTokenExpiresAt: new Date(Date.now() + 10_000),
+    });
+
+    await expect(service.refreshToken("token")).resolves.toMatchObject({
+      isAuthenticated: true,
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale refresh token once the grace window has expired", async () => {
+    const { service } = makeRefreshService({
+      currentRefreshTokenId: "new-jti",
+      previousRefreshTokenId: "current-jti",
+      previousRefreshTokenExpiresAt: new Date(Date.now() - 10_000),
+    });
+
+    await expect(service.refreshToken("token")).rejects.toThrow(
+      "Invalid refresh token",
+    );
+  });
+
+  it("rejects a refresh token that does not match the session's current or grace state", async () => {
+    const { service } = makeRefreshService({
+      currentRefreshTokenId: "someone-else-jti",
+      previousRefreshTokenId: null,
+      previousRefreshTokenExpiresAt: null,
+    });
+
+    await expect(service.refreshToken("token")).rejects.toThrow(
+      "Invalid refresh token",
+    );
+  });
+});
