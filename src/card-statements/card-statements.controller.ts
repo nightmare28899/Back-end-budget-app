@@ -87,6 +87,16 @@ export class CardStatementsController {
     return this.cardStatementsService.confirm(user.id, id, dto);
   }
 
+  @Post(":id/process")
+  @ApiOperation({ summary: "Process or retry an uploaded Banamex statement" })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  process(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+  ) {
+    return this.cardStatementsService.processStoredImport(user.id, id);
+  }
+
   @Post(":id/revert")
   @ApiOperation({ summary: "Revert expenses created by a statement import" })
   revert(

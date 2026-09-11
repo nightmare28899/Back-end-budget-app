@@ -20,6 +20,7 @@ describe("Statement imports (e2e)", () => {
     updateRows: jest.fn(),
     confirm: jest.fn(),
     revert: jest.fn(),
+    processStoredImport: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -76,8 +77,10 @@ describe("Statement imports (e2e)", () => {
   it("accepts one PDF statement and scopes it to the current user", async () => {
     service.createImport.mockResolvedValue({
       id: "import-1",
-      status: "UPLOADED",
-      version: 1,
+      status: "NEEDS_REVIEW",
+      version: 2,
+      warningCount: 1,
+      failureCode: null,
       duplicate: false,
     });
 
@@ -91,8 +94,10 @@ describe("Statement imports (e2e)", () => {
       .expect(201)
       .expect({
         id: "import-1",
-        status: "UPLOADED",
-        version: 1,
+        status: "NEEDS_REVIEW",
+        version: 2,
+        warningCount: 1,
+        failureCode: null,
         duplicate: false,
       });
 
@@ -114,5 +119,22 @@ describe("Statement imports (e2e)", () => {
       .expect(400);
 
     expect(service.createImport).not.toHaveBeenCalled();
+  });
+
+  it("retries processing within the authenticated user's scope", async () => {
+    service.processStoredImport.mockResolvedValue({
+      id: "7d33044b-d8b3-4f04-aa50-5eeed503e685",
+      status: "NEEDS_REVIEW",
+    });
+
+    await request(app.getHttpServer())
+      .post("/statement-imports/7d33044b-d8b3-4f04-aa50-5eeed503e685/process")
+      .set("Authorization", "Bearer test-token")
+      .expect(201);
+
+    expect(service.processStoredImport).toHaveBeenCalledWith(
+      "user-1",
+      "7d33044b-d8b3-4f04-aa50-5eeed503e685",
+    );
   });
 });

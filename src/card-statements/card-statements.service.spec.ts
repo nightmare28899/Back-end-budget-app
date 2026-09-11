@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import {
   StatementImportStatus,
   StatementReconciliationStatus,
@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { CardStatementsService } from "./card-statements.service";
 import type { ParsedStatementData } from "./card-statements.types";
+import { StatementProcessingError } from "./parsers/statement-parser.interface";
 
 describe("CardStatementsService", () => {
   type StatementRowCreateManyArg = {
@@ -78,6 +79,12 @@ describe("CardStatementsService", () => {
     uploadFile: jest.fn(),
     deleteFile: jest.fn(),
   };
+  const processor = {
+    process: jest.fn(),
+  };
+  const entitlements = {
+    assertPremium: jest.fn<Promise<void>, [string, string]>(),
+  };
 
   let service: CardStatementsService;
 
@@ -89,7 +96,51 @@ describe("CardStatementsService", () => {
       }
       return Promise.all(input as Promise<unknown>[]);
     });
-    service = new CardStatementsService(prisma as never, storage as never);
+    entitlements.assertPremium.mockResolvedValue(undefined);
+    service = new CardStatementsService(
+      prisma as never,
+      storage as never,
+      processor as never,
+      entitlements as never,
+    );
+  });
+
+  it("blocks every statement operation before side effects when Premium is missing", async () => {
+    const premiumError = new ForbiddenException({
+      code: "PREMIUM_REQUIRED",
+      message: "Premium subscription required",
+      feature: "statement_imports",
+      isPremium: false,
+    });
+    entitlements.assertPremium.mockRejectedValue(premiumError);
+
+    const operations: Array<() => Promise<unknown>> = [
+      () => service.createImport("user-1", {}, buildFile("%PDF-test")),
+      () => service.processStoredImport("user-1", "import-1"),
+      () => service.findAll("user-1", {}),
+      () => service.findOne("user-1", "import-1"),
+      () =>
+        service.updateRows("user-1", "import-1", {
+          version: 1,
+          rows: [],
+        }),
+      () => service.confirm("user-1", "import-1", { version: 1 }),
+      () => service.revert("user-1", "import-1", { version: 1 }),
+    ];
+
+    for (const operation of operations) {
+      await expect(operation()).rejects.toBe(premiumError);
+    }
+
+    expect(entitlements.assertPremium).toHaveBeenCalledTimes(operations.length);
+    expect(entitlements.assertPremium).toHaveBeenCalledWith(
+      "user-1",
+      "statement_imports",
+    );
+    expect(storage.uploadFile).not.toHaveBeenCalled();
+    expect(statementImport.findFirst).not.toHaveBeenCalled();
+    expect(statementImport.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("rejects a file whose bytes do not contain a PDF signature", async () => {
@@ -104,6 +155,8 @@ describe("CardStatementsService", () => {
       id: "import-1",
       status: StatementImportStatus.UPLOADED,
       version: 1,
+      warningCount: 0,
+      failureCode: null,
     });
 
     await expect(
@@ -112,9 +165,79 @@ describe("CardStatementsService", () => {
       id: "import-1",
       status: StatementImportStatus.UPLOADED,
       version: 1,
+      warningCount: 0,
+      failureCode: null,
       duplicate: true,
     });
     expect(storage.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("processes a newly stored PDF into review staging", async () => {
+    const parsed = parsedStatement([parsedRow("page-1:row-1", 0)]);
+    statementImport.findUnique.mockResolvedValue(null);
+    storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
+    statementImport.create.mockResolvedValue({
+      id: "import-1",
+      status: StatementImportStatus.UPLOADED,
+      version: 1,
+    });
+    processor.process.mockResolvedValue(parsed);
+    jest.spyOn(service, "stageParsedStatement").mockResolvedValue({
+      id: "import-1",
+      status: StatementImportStatus.NEEDS_REVIEW,
+      version: 2,
+      warningCount: 0,
+      failureCode: null,
+    } as never);
+
+    await expect(
+      service.createImport("user-1", {}, buildFile("%PDF-new")),
+    ).resolves.toMatchObject({
+      id: "import-1",
+      status: StatementImportStatus.NEEDS_REVIEW,
+      duplicate: false,
+    });
+    expect(processor.process).toHaveBeenCalledWith(expect.any(Buffer));
+    expect(storage.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("marks an import failed without exposing extractor internals", async () => {
+    statementImport.findUnique.mockResolvedValue(null);
+    storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
+    statementImport.create.mockResolvedValue({
+      id: "import-1",
+      status: StatementImportStatus.UPLOADED,
+      version: 1,
+    });
+    processor.process.mockRejectedValue(
+      new StatementProcessingError(
+        "BANAMEX_PERIOD_NOT_FOUND",
+        "The Banamex statement period could not be identified",
+      ),
+    );
+    statementImport.updateMany.mockResolvedValue({ count: 1 });
+    statementImport.findFirst.mockResolvedValue({
+      ...baseImport(StatementImportStatus.FAILED, 2, "object-key"),
+      warningCount: 0,
+      failureCode: "BANAMEX_PERIOD_NOT_FOUND",
+      failureMessage: "The Banamex statement period could not be identified",
+      reconciliation: null,
+      paymentTargets: [],
+      instruments: [],
+      financingPlans: [],
+      rows: [],
+    });
+
+    await expect(
+      service.createImport("user-1", {}, buildFile("%PDF-invalid-layout")),
+    ).resolves.toMatchObject({
+      id: "import-1",
+      status: StatementImportStatus.FAILED,
+      warningCount: 0,
+      failureCode: "BANAMEX_PERIOD_NOT_FOUND",
+      duplicate: false,
+    });
+    expect(storage.deleteFile).not.toHaveBeenCalled();
   });
 
   it("preserves repeated-looking rows when their occurrence keys differ", async () => {

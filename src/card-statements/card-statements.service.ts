@@ -16,8 +16,11 @@ import {
   StatementSourceFormat,
 } from "@prisma/client";
 import { createHash } from "node:crypto";
+import { EntitlementsService } from "../common/entitlements/entitlements.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
+import { DEFAULT_MAX_STATEMENT_FILE_SIZE } from "../common/upload/statement-upload.config";
+import { CardStatementProcessorService } from "./card-statement-processor.service";
 import type { ParsedStatementData } from "./card-statements.types";
 import { ConfirmStatementImportDto } from "./dto/confirm-statement-import.dto";
 import { CreateStatementImportDto } from "./dto/create-statement-import.dto";
@@ -26,9 +29,11 @@ import {
   UpdateStatementRowDto,
   UpdateStatementRowsDto,
 } from "./dto/update-statement-rows.dto";
+import { StatementProcessingError } from "./parsers/statement-parser.interface";
 
 const PDF_SIGNATURE = "%PDF-";
 const DEFAULT_PAGE_SIZE = 20;
+const STATEMENT_IMPORT_FEATURE = "statement_imports";
 const ALLOWED_EXPENSE_KINDS = new Set<StatementRowKind>([
   StatementRowKind.CHARGE,
   StatementRowKind.INTEREST,
@@ -57,6 +62,8 @@ export class CardStatementsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    private readonly statementProcessor: CardStatementProcessorService,
+    private readonly entitlementsService: EntitlementsService,
   ) {}
 
   async createImport(
@@ -64,6 +71,8 @@ export class CardStatementsService {
     dto: CreateStatementImportDto,
     file?: Express.Multer.File,
   ) {
+    await this.assertPremium(userId);
+
     if (!file) {
       throw new BadRequestException("Statement PDF is required");
     }
@@ -86,6 +95,8 @@ export class CardStatementsService {
         id: true,
         status: true,
         version: true,
+        warningCount: true,
+        failureCode: true,
       },
     });
 
@@ -98,8 +109,13 @@ export class CardStatementsService {
       `statements/${userId}`,
     );
 
+    let statementImport: {
+      id: string;
+      status: StatementImportStatus;
+      version: number;
+    };
     try {
-      const statementImport = await this.prisma.statementImport.create({
+      statementImport = await this.prisma.statementImport.create({
         data: {
           userId,
           creditCardId: dto.creditCardId,
@@ -116,8 +132,6 @@ export class CardStatementsService {
           version: true,
         },
       });
-
-      return { ...statementImport, duplicate: false };
     } catch (error) {
       await this.tryDeleteSourceObject(sourceObjectKey);
 
@@ -133,6 +147,8 @@ export class CardStatementsService {
             id: true,
             status: true,
             version: true,
+            warningCount: true,
+            failureCode: true,
           },
         });
 
@@ -143,9 +159,47 @@ export class CardStatementsService {
 
       throw error;
     }
+
+    const processed = await this.processImportBuffer(
+      userId,
+      statementImport.id,
+      file.buffer,
+    );
+    return {
+      id: processed.id,
+      status: processed.status,
+      version: processed.version,
+      warningCount: processed.warningCount,
+      failureCode: processed.failureCode,
+      duplicate: false,
+    };
+  }
+
+  async processStoredImport(userId: string, id: string) {
+    await this.assertPremium(userId);
+
+    const statementImport = await this.findOwnedImport(userId, id);
+    if (
+      statementImport.status !== StatementImportStatus.UPLOADED &&
+      statementImport.status !== StatementImportStatus.FAILED
+    ) {
+      throw new ConflictException(
+        "Only uploaded or failed imports can be processed",
+      );
+    }
+    if (!statementImport.sourceObjectKey) {
+      throw new ConflictException(
+        "Statement source PDF is no longer available",
+      );
+    }
+
+    const buffer = await this.readStoredSource(statementImport.sourceObjectKey);
+    return this.processImportBuffer(userId, id, buffer);
   }
 
   async findAll(userId: string, query: QueryStatementImportsDto) {
+    await this.assertPremium(userId);
+
     const page = query.page ?? 1;
     const limit = query.limit ?? DEFAULT_PAGE_SIZE;
     const where: Prisma.StatementImportWhereInput = {
@@ -189,6 +243,8 @@ export class CardStatementsService {
   }
 
   async findOne(userId: string, id: string) {
+    await this.assertPremium(userId);
+
     const statementImport = await this.prisma.statementImport.findFirst({
       where: { id, userId },
       include: {
@@ -405,6 +461,8 @@ export class CardStatementsService {
   }
 
   async updateRows(userId: string, id: string, dto: UpdateStatementRowsDto) {
+    await this.assertPremium(userId);
+
     const statementImport = await this.findOwnedImport(userId, id);
     this.assertReviewable(
       statementImport.status,
@@ -464,6 +522,8 @@ export class CardStatementsService {
   }
 
   async confirm(userId: string, id: string, dto: ConfirmStatementImportDto) {
+    await this.assertPremium(userId);
+
     const statementImport = await this.findOwnedImport(userId, id);
     if (statementImport.status === StatementImportStatus.CONFIRMED) {
       return this.buildIdempotentConfirmation(userId, id);
@@ -574,6 +634,8 @@ export class CardStatementsService {
   }
 
   async revert(userId: string, id: string, dto: ConfirmStatementImportDto) {
+    await this.assertPremium(userId);
+
     const statementImport = await this.findOwnedImport(userId, id);
     if (statementImport.status === StatementImportStatus.REVERTED) {
       return {
@@ -656,6 +718,82 @@ export class CardStatementsService {
       throw new NotFoundException("Statement import not found");
     }
     return statementImport;
+  }
+
+  private async processImportBuffer(
+    userId: string,
+    id: string,
+    buffer: Buffer,
+  ) {
+    let parsed: ParsedStatementData;
+    try {
+      parsed = await this.statementProcessor.process(buffer);
+    } catch (error) {
+      const processingError =
+        error instanceof StatementProcessingError
+          ? error
+          : new StatementProcessingError(
+              "STATEMENT_PROCESSING_FAILED",
+              "The statement could not be processed",
+            );
+      await this.markProcessingFailed(userId, id, processingError);
+      return this.findOne(userId, id);
+    }
+
+    return this.stageParsedStatement(userId, id, parsed);
+  }
+
+  private async markProcessingFailed(
+    userId: string,
+    id: string,
+    error: StatementProcessingError,
+  ) {
+    const updated = await this.prisma.statementImport.updateMany({
+      where: {
+        id,
+        userId,
+        status: {
+          in: [StatementImportStatus.UPLOADED, StatementImportStatus.FAILED],
+        },
+      },
+      data: {
+        status: StatementImportStatus.FAILED,
+        failureCode: error.code,
+        failureMessage: error.message,
+        version: { increment: 1 },
+      },
+    });
+    if (updated.count !== 1) {
+      throw new ConflictException("Statement import changed during processing");
+    }
+  }
+
+  private async readStoredSource(sourceObjectKey: string) {
+    const file = await this.storageService.getFileStream(sourceObjectKey);
+    if (
+      file.contentLength !== null &&
+      file.contentLength > DEFAULT_MAX_STATEMENT_FILE_SIZE
+    ) {
+      throw new BadRequestException("Stored statement exceeds the file limit");
+    }
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const rawChunk of file.stream as AsyncIterable<
+      Buffer | string
+    >) {
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk, "utf8");
+      size += chunk.length;
+      if (size > DEFAULT_MAX_STATEMENT_FILE_SIZE) {
+        throw new BadRequestException(
+          "Stored statement exceeds the file limit",
+        );
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   }
 
   private assertReviewable(
@@ -956,5 +1094,12 @@ export class CardStatementsService {
 
   private isUniqueConstraintError(error: unknown) {
     return error instanceof Error && "code" in error && error.code === "P2002";
+  }
+
+  private assertPremium(userId: string) {
+    return this.entitlementsService.assertPremium(
+      userId,
+      STATEMENT_IMPORT_FEATURE,
+    );
   }
 }
