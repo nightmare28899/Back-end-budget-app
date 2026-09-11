@@ -17,6 +17,10 @@ describe("BanamexStatementParser", () => {
     join(__dirname, "__fixtures__", "banamex-statement.sanitized.txt"),
     "utf8",
   );
+  const costcoFixture = readFileSync(
+    join(__dirname, "__fixtures__", "banamex-statement-costco.sanitized.txt"),
+    "utf8",
+  );
 
   it("parses the sanitized section-based statement fixture", () => {
     const result = parser.parse({
@@ -54,6 +58,17 @@ describe("BanamexStatementParser", () => {
       installmentCount: 6,
       installmentAmount: 500,
     });
+  });
+
+  it("parses the Costco co-branded layout (colon-separated header, DD-MMM-YYYY dates)", () => {
+    const result = parser.parse({
+      text: costcoFixture,
+      pages: [{ number: 1, text: costcoFixture }],
+    });
+
+    expect(result.periodStart.toISOString()).toBe("2026-07-22T12:00:00.000Z");
+    expect(result.periodEnd.toISOString()).toBe("2026-08-21T12:00:00.000Z");
+    expect(result.rows.length).toBeGreaterThan(0);
   });
 
   it("preserves repeated installments as separate source occurrences", () => {

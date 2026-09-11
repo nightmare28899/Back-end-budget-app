@@ -24,6 +24,7 @@ import {
   BANAMEX_MONEY_AT_END_PATTERN,
   BANAMEX_TRANSACTION_PATTERN,
   type BanamexSourceLine,
+  DATE_PATTERN,
   extractTrailingMoney,
   foldStatementText,
   normalizeStatementMerchant,
@@ -100,10 +101,13 @@ export class BanamexStatementParser implements StatementParser {
   }
 
   private extractPeriod(lines: BanamexSourceLine[]) {
+    // The standard layout prints "PERIODO DEL <date> AL <date>"; the Costco
+    // co-branded layout prints "PERIODO: <date> al <date>" (colon, no "DEL").
+    const pattern = new RegExp(
+      `PERIODO\\s*:?\\s*(?:DEL\\s+)?(${DATE_PATTERN})\\s+(?:AL|A)\\s+(${DATE_PATTERN})`,
+    );
     for (const line of lines) {
-      const match = line.fold.match(
-        /PERIODO(?:\s+DEL)?\s+(\d{2}\/\d{2}\/\d{2,4})\s+(?:AL|A)\s+(\d{2}\/\d{2}\/\d{2,4})/,
-      );
+      const match = line.fold.match(pattern);
       if (match) {
         const start = parseStatementDate(match[1]);
         const end = parseStatementDate(match[2]);
@@ -116,10 +120,13 @@ export class BanamexStatementParser implements StatementParser {
   }
 
   private extractDueDate(lines: BanamexSourceLine[]) {
+    // The Costco co-branded layout prefixes the date with a weekday name,
+    // e.g. "FECHA LIMITE DE PAGO: JUEVES, 10-SEP-2026".
+    const pattern = new RegExp(
+      `FECHA LIMITE DE PAGO\\s*:?\\s*(?:[A-Z]+,\\s*)?(${DATE_PATTERN})`,
+    );
     for (const line of lines) {
-      const match = line.fold.match(
-        /FECHA LIMITE DE PAGO\s+(\d{2}\/\d{2}\/\d{2,4})/,
-      );
+      const match = line.fold.match(pattern);
       if (match) {
         return parseStatementDate(match[1]);
       }

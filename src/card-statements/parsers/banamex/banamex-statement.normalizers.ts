@@ -1,7 +1,34 @@
 import type { ExtractedStatementText } from "../statement-parser.interface";
 
-const DATE_PATTERN = "\\d{2}/\\d{2}/(?:\\d{2}|\\d{4})";
+// Most Banamex statements print DD/MM/YYYY, but the Costco co-branded
+// template (a distinct layout, not just a different card design) uses
+// DD-MMM-YYYY with a Spanish three-letter month abbreviation instead —
+// e.g. "22-jul-2026" rather than "22/07/2026". Accept either everywhere a
+// statement date can appear.
+// \d{2,4} (a quantifier, greedy) tries 4 digits before falling back to 2 —
+// unlike an alternation `(?:\d{2}|\d{4})`, which tries the first branch and
+// accepts it as soon as the rest of a larger pattern can still match,
+// silently truncating a 4-digit year to 2 digits.
+const NUMERIC_DATE_PATTERN = "\\d{2}/\\d{2}/\\d{2,4}";
+const ABBREVIATED_DATE_PATTERN = "\\d{2}-[A-Z]{3}-\\d{4}";
+export const DATE_PATTERN = `(?:${NUMERIC_DATE_PATTERN}|${ABBREVIATED_DATE_PATTERN})`;
 const MONEY_PATTERN = "\\(?-?\\$?\\s*[\\d,]+\\.\\d{2}\\)?";
+
+const SPANISH_MONTH_ABBREVIATIONS: Record<string, number> = {
+  ENE: 1,
+  FEB: 2,
+  MAR: 3,
+  ABR: 4,
+  MAY: 5,
+  JUN: 6,
+  JUL: 7,
+  AGO: 8,
+  SEP: 9,
+  SET: 9,
+  OCT: 10,
+  NOV: 11,
+  DIC: 12,
+};
 
 export const BANAMEX_TRANSACTION_PATTERN = new RegExp(
   `^(${DATE_PATTERN})\\s+(?:(${DATE_PATTERN})\\s+)?(.+?)\\s+(${MONEY_PATTERN})$`,
@@ -43,12 +70,7 @@ export function foldStatementText(value: string) {
     .trim();
 }
 
-export function parseStatementDate(value: string) {
-  const [dayRaw, monthRaw, yearRaw] = value.split("/");
-  const day = Number(dayRaw);
-  const month = Number(monthRaw);
-  const shortYear = Number(yearRaw);
-  const year = yearRaw.length === 2 ? 2000 + shortYear : shortYear;
+function buildValidatedStatementDate(year: number, month: number, day: number) {
   const date = new Date(Date.UTC(year, month - 1, day, 12));
   if (
     date.getUTCFullYear() !== year ||
@@ -58,6 +80,27 @@ export function parseStatementDate(value: string) {
     return null;
   }
   return date;
+}
+
+export function parseStatementDate(value: string) {
+  const numeric = value.match(/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/);
+  if (numeric) {
+    const day = Number(numeric[1]);
+    const month = Number(numeric[2]);
+    const yearRaw = numeric[3];
+    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+    return buildValidatedStatementDate(year, month, day);
+  }
+
+  const abbreviated = value.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+  if (abbreviated) {
+    const day = Number(abbreviated[1]);
+    const month = SPANISH_MONTH_ABBREVIATIONS[abbreviated[2].toUpperCase()];
+    if (!month) return null;
+    return buildValidatedStatementDate(Number(abbreviated[3]), month, day);
+  }
+
+  return null;
 }
 
 export function parseStatementMoney(value: string) {
