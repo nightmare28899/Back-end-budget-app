@@ -97,6 +97,7 @@ export class CardStatementsService {
         version: true,
         warningCount: true,
         failureCode: true,
+        failureMessage: true,
       },
     });
 
@@ -149,6 +150,7 @@ export class CardStatementsService {
             version: true,
             warningCount: true,
             failureCode: true,
+            failureMessage: true,
           },
         });
 
@@ -171,6 +173,7 @@ export class CardStatementsService {
       version: processed.version,
       warningCount: processed.warningCount,
       failureCode: processed.failureCode,
+      failureMessage: processed.failureMessage,
       duplicate: false,
     };
   }
@@ -741,6 +744,14 @@ export class CardStatementsService {
               "STATEMENT_PROCESSING_FAILED",
               "The statement could not be processed",
             );
+      if (!(error instanceof StatementProcessingError)) {
+        // An unexpected (non-parser) failure — the client only ever sees the
+        // generic message above, so this is the only place the real cause
+        // is recoverable.
+        this.logger.error(
+          `Unexpected error processing statement import ${id}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+        );
+      }
       await this.markProcessingFailed(userId, id, processingError);
       return this.findOne(userId, id);
     }

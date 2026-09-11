@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Logger } from "@nestjs/common";
 import {
   StatementImportStatus,
   StatementReconciliationStatus,
@@ -262,9 +262,47 @@ describe("CardStatementsService", () => {
       status: StatementImportStatus.FAILED,
       warningCount: 0,
       failureCode: "BANAMEX_PERIOD_NOT_FOUND",
+      failureMessage: "The Banamex statement period could not be identified",
       duplicate: false,
     });
     expect(storage.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("logs and flattens an unexpected (non-parser) processing error", async () => {
+    statementImport.findUnique.mockResolvedValue(null);
+    storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
+    statementImport.create.mockResolvedValue({
+      id: "import-1",
+      status: StatementImportStatus.UPLOADED,
+      version: 1,
+    });
+    processor.process.mockRejectedValue(new Error("unexpected pdf-parse crash"));
+    statementImport.updateMany.mockResolvedValue({ count: 1 });
+    statementImport.findFirst.mockResolvedValue({
+      ...baseImport(StatementImportStatus.FAILED, 2, "object-key"),
+      warningCount: 0,
+      failureCode: "STATEMENT_PROCESSING_FAILED",
+      failureMessage: "The statement could not be processed",
+      reconciliation: null,
+      paymentTargets: [],
+      instruments: [],
+      financingPlans: [],
+      rows: [],
+    });
+    const errorSpy = jest.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
+
+    await expect(
+      service.createImport("user-1", {}, buildFile("%PDF-crash")),
+    ).resolves.toMatchObject({
+      status: StatementImportStatus.FAILED,
+      failureCode: "STATEMENT_PROCESSING_FAILED",
+      failureMessage: "The statement could not be processed",
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unexpected pdf-parse crash"),
+    );
+
+    errorSpy.mockRestore();
   });
 
   it("preserves repeated-looking rows when their occurrence keys differ", async () => {
