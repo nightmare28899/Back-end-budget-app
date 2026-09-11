@@ -200,11 +200,16 @@ export class CardStatementsService {
   async findAll(userId: string, query: QueryStatementImportsDto) {
     await this.assertPremium(userId);
 
+    if (query.creditCardId) {
+      await this.assertCreditCardOwnership(userId, query.creditCardId);
+    }
+
     const page = query.page ?? 1;
     const limit = query.limit ?? DEFAULT_PAGE_SIZE;
     const where: Prisma.StatementImportWhereInput = {
       userId,
       ...(query.status ? { status: query.status } : {}),
+      ...(query.creditCardId ? { creditCardId: query.creditCardId } : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([

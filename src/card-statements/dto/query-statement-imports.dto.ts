@@ -1,6 +1,6 @@
 import { StatementImportStatus } from "@prisma/client";
 import { Type } from "class-transformer";
-import { IsEnum, IsInt, IsOptional, Max, Min } from "class-validator";
+import { IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 
 export class QueryStatementImportsDto {
@@ -8,6 +8,11 @@ export class QueryStatementImportsDto {
   @IsOptional()
   @IsEnum(StatementImportStatus)
   status?: StatementImportStatus;
+
+  @ApiPropertyOptional({ description: "Filter to imports linked to this credit card" })
+  @IsOptional()
+  @IsUUID()
+  creditCardId?: string;
 
   @ApiPropertyOptional({ default: 1, minimum: 1 })
   @IsOptional()

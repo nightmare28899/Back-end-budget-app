@@ -143,6 +143,33 @@ describe("CardStatementsService", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it("filters the import list by credit card when it belongs to the user", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
+    statementImport.findMany.mockResolvedValue([]);
+    statementImport.count.mockResolvedValue(0);
+
+    await service.findAll("user-1", { creditCardId: "card-1" });
+
+    expect(prisma.creditCard.findFirst).toHaveBeenCalledWith({
+      where: { id: "card-1", userId: "user-1" },
+      select: { id: true },
+    });
+    expect(statementImport.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ creditCardId: "card-1" }),
+      }),
+    );
+  });
+
+  it("rejects filtering by a credit card that does not belong to the user", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.findAll("user-1", { creditCardId: "someone-elses-card" }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(statementImport.findMany).not.toHaveBeenCalled();
+  });
+
   it("rejects a file whose bytes do not contain a PDF signature", async () => {
     await expect(
       service.createImport("user-1", {}, buildFile("not-a-pdf")),
