@@ -32,6 +32,7 @@ const SPANISH_MONTH_ABBREVIATIONS: Record<string, number> = {
 
 export const BANAMEX_TRANSACTION_PATTERN = new RegExp(
   `^(${DATE_PATTERN})\\s+(?:(${DATE_PATTERN})\\s+)?(.+?)\\s+(${MONEY_PATTERN})$`,
+  "i",
 );
 export const BANAMEX_MONEY_AT_END_PATTERN = new RegExp(`(${MONEY_PATTERN})$`);
 

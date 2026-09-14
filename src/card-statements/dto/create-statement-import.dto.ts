@@ -1,11 +1,10 @@
-import { IsOptional, IsUUID } from "class-validator";
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import { IsUUID } from "class-validator";
+import { ApiProperty } from "@nestjs/swagger";
 
 export class CreateStatementImportDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: "Existing credit card associated with this statement.",
   })
-  @IsOptional()
   @IsUUID()
-  creditCardId?: string;
+  creditCardId: string;
 }

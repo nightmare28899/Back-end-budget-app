@@ -135,23 +135,59 @@ export class BanamexStatementParser implements StatementParser {
   }
 
   private extractSummary(lines: BanamexSourceLine[]): SummaryValues {
-    return {
-      openingBalance: this.findLabeledAmount(lines, [/^SALDO ANTERIOR\b/]),
-      chargesTotal: this.findLabeledAmount(lines, [
+    // The standard layout prints one "SALDO ANTERIOR"/"COMPRAS Y OTROS
+    // CARGOS"/"SALDO NUEVO" line each with the total already computed. The
+    // "RESUMEN DE CARGOS Y ABONOS DEL PERIODO" layout (seen on some Costco
+    // co-branded statements) instead itemizes charges across several
+    // "<label>[footnote digits] [+-=] $amount" lines and never prints an
+    // explicit closing balance — it has to be derived from the other totals.
+    const openingBalance =
+      this.findLabeledAmount(lines, [/^SALDO ANTERIOR\b/]) ??
+      this.findLabeledAmount(lines, [
+        /^ADEUDO DEL PERIODO ANTERIOR\d*\s*[+\-=]/,
+      ]);
+
+    const chargesTotal =
+      this.findLabeledAmount(lines, [
         /^COMPRAS Y (?:OTROS )?CARGOS\b/,
         /^CARGOS DEL PERIODO\b/,
-      ]),
-      paymentsTotal: this.findLabeledAmount(lines, [
-        /^PAGOS Y ABONOS\b/,
-        /^PAGOS DEL PERIODO\b/,
-      ]),
-      creditsTotal:
-        this.findLabeledAmount(lines, [/^CREDITOS\b/, /^BONIFICACIONES\b/]) ??
-        0,
-      closingBalance: this.findLabeledAmount(lines, [
+      ]) ??
+      this.sumLabeledAmounts(lines, [
+        /^CARGOS REGULARES(?:\s*\([^)]*\))?\d*\s*[+\-=]/,
+        /^CARGOS COMPRAS A MESES \(CAPITAL\)\d*\s*[+\-=]/,
+        /^MONTO DE INTERESES\d*\s*[+\-=]/,
+        /^MONTO DE COMISIONES\d*\s*[+\-=]/,
+        /^IVA DE INTERESES Y COMISIONES\d*\s*[+\-=]/,
+      ]);
+
+    const paymentsTotal = this.findLabeledAmount(lines, [
+      /^PAGOS Y ABONOS\b/,
+      /^PAGOS DEL PERIODO\b/,
+    ]);
+
+    const creditsTotal =
+      this.findLabeledAmount(lines, [/^CREDITOS\b/, /^BONIFICACIONES\b/]) ??
+      0;
+
+    const closingBalance =
+      this.findLabeledAmount(lines, [
         /^SALDO NUEVO\b/,
         /^SALDO AL CORTE\b/,
-      ]),
+      ]) ??
+      (openingBalance !== null &&
+      chargesTotal !== null &&
+      paymentsTotal !== null
+        ? roundStatementMoney(
+            openingBalance + chargesTotal - paymentsTotal - creditsTotal,
+          )
+        : null);
+
+    return {
+      openingBalance,
+      chargesTotal,
+      paymentsTotal,
+      creditsTotal,
+      closingBalance,
     };
   }
 
@@ -166,6 +202,22 @@ export class BanamexStatementParser implements StatementParser {
       }
     }
     return null;
+  }
+
+  private sumLabeledAmounts(lines: BanamexSourceLine[], labels: RegExp[]) {
+    let total = 0;
+    let found = false;
+    for (const line of lines) {
+      if (!labels.some((label) => label.test(line.fold))) {
+        continue;
+      }
+      const amount = extractTrailingMoney(line.text);
+      if (amount !== null) {
+        total += Math.abs(amount);
+        found = true;
+      }
+    }
+    return found ? roundStatementMoney(total) : null;
   }
 
   private extractPaymentTargets(
@@ -323,13 +375,23 @@ export class BanamexStatementParser implements StatementParser {
         financingType: StatementFinancingType.NO_INTEREST,
       };
     }
+    if (/COMPRAS.*MESES.*CON INTERESES/.test(line.fold)) {
+      return {
+        section: StatementSection.FINANCING_PLAN,
+        financingType: StatementFinancingType.INTEREST_BEARING,
+      };
+    }
     if (/PLAN DE PAGOS|SALDO DIFERIDO|PAGOS FIJOS/.test(line.fold)) {
       return {
         section: StatementSection.FINANCING_PLAN,
         financingType: StatementFinancingType.REFINANCED,
       };
     }
-    if (/DETALLE DE OPERACIONES|MOVIMIENTOS DEL PERIODO/.test(line.fold)) {
+    if (
+      /DETALLE DE OPERACIONES|MOVIMIENTOS DEL PERIODO|DESGLOSE DE MOVIMIENTOS/.test(
+        line.fold,
+      )
+    ) {
       return { section: StatementSection.CURRENT_CHARGES };
     }
     if (/RESUMEN DE SALDOS|RESUMEN DE CUENTA/.test(line.fold)) {

@@ -234,6 +234,8 @@ export class CardStatementsService {
           parsedAt: true,
           confirmedAt: true,
           revertedAt: true,
+          isPaid: true,
+          paidAt: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -699,6 +701,36 @@ export class CardStatementsService {
       deletedExpenseCount,
       alreadyReverted: false,
     };
+  }
+
+  async remove(userId: string, id: string) {
+    await this.assertPremium(userId);
+
+    const statementImport = await this.findOwnedImport(userId, id);
+    if (statementImport.status === StatementImportStatus.CONFIRMED) {
+      throw new ConflictException("Revert this statement before deleting it.");
+    }
+
+    await this.deleteStoredSource(userId, id, statementImport.sourceObjectKey);
+    await this.prisma.statementImport.delete({ where: { id } });
+
+    return { message: "Statement import deleted" };
+  }
+
+  async setPaidStatus(userId: string, id: string, isPaid: boolean) {
+    await this.assertPremium(userId);
+
+    await this.findOwnedImport(userId, id);
+
+    await this.prisma.statementImport.update({
+      where: { id },
+      data: {
+        isPaid,
+        paidAt: isPaid ? new Date() : null,
+      },
+    });
+
+    return this.findOne(userId, id);
   }
 
   private async buildIdempotentConfirmation(userId: string, id: string) {

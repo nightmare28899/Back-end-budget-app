@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import {
   StatementImportStatus,
   StatementReconciliationStatus,
@@ -22,6 +28,7 @@ describe("CardStatementsService", () => {
     count: jest.fn(),
     findFirst: jest.fn(),
     updateMany: jest.fn(),
+    update: jest.fn(),
   };
   const expense = {
     count: jest.fn(),
@@ -115,7 +122,12 @@ describe("CardStatementsService", () => {
     entitlements.assertPremium.mockRejectedValue(premiumError);
 
     const operations: Array<() => Promise<unknown>> = [
-      () => service.createImport("user-1", {}, buildFile("%PDF-test")),
+      () =>
+        service.createImport(
+          "user-1",
+          { creditCardId: "card-1" },
+          buildFile("%PDF-test"),
+        ),
       () => service.processStoredImport("user-1", "import-1"),
       () => service.findAll("user-1", {}),
       () => service.findOne("user-1", "import-1"),
@@ -126,6 +138,8 @@ describe("CardStatementsService", () => {
         }),
       () => service.confirm("user-1", "import-1", { version: 1 }),
       () => service.revert("user-1", "import-1", { version: 1 }),
+      () => service.setPaidStatus("user-1", "import-1", true),
+      () => service.remove("user-1", "import-1"),
     ];
 
     for (const operation of operations) {
@@ -171,13 +185,20 @@ describe("CardStatementsService", () => {
   });
 
   it("rejects a file whose bytes do not contain a PDF signature", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
+
     await expect(
-      service.createImport("user-1", {}, buildFile("not-a-pdf")),
+      service.createImport(
+        "user-1",
+        { creditCardId: "card-1" },
+        buildFile("not-a-pdf"),
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(storage.uploadFile).not.toHaveBeenCalled();
   });
 
   it("returns the existing import when the same source hash is uploaded again", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
     statementImport.findUnique.mockResolvedValue({
       id: "import-1",
       status: StatementImportStatus.UPLOADED,
@@ -187,7 +208,11 @@ describe("CardStatementsService", () => {
     });
 
     await expect(
-      service.createImport("user-1", {}, buildFile("%PDF-same")),
+      service.createImport(
+        "user-1",
+        { creditCardId: "card-1" },
+        buildFile("%PDF-same"),
+      ),
     ).resolves.toEqual({
       id: "import-1",
       status: StatementImportStatus.UPLOADED,
@@ -200,6 +225,7 @@ describe("CardStatementsService", () => {
   });
 
   it("processes a newly stored PDF into review staging", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
     const parsed = parsedStatement([parsedRow("page-1:row-1", 0)]);
     statementImport.findUnique.mockResolvedValue(null);
     storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
@@ -218,7 +244,11 @@ describe("CardStatementsService", () => {
     } as never);
 
     await expect(
-      service.createImport("user-1", {}, buildFile("%PDF-new")),
+      service.createImport(
+        "user-1",
+        { creditCardId: "card-1" },
+        buildFile("%PDF-new"),
+      ),
     ).resolves.toMatchObject({
       id: "import-1",
       status: StatementImportStatus.NEEDS_REVIEW,
@@ -229,6 +259,7 @@ describe("CardStatementsService", () => {
   });
 
   it("marks an import failed without exposing extractor internals", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
     statementImport.findUnique.mockResolvedValue(null);
     storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
     statementImport.create.mockResolvedValue({
@@ -256,7 +287,11 @@ describe("CardStatementsService", () => {
     });
 
     await expect(
-      service.createImport("user-1", {}, buildFile("%PDF-invalid-layout")),
+      service.createImport(
+        "user-1",
+        { creditCardId: "card-1" },
+        buildFile("%PDF-invalid-layout"),
+      ),
     ).resolves.toMatchObject({
       id: "import-1",
       status: StatementImportStatus.FAILED,
@@ -269,6 +304,7 @@ describe("CardStatementsService", () => {
   });
 
   it("logs and flattens an unexpected (non-parser) processing error", async () => {
+    prisma.creditCard.findFirst.mockResolvedValue({ id: "card-1" });
     statementImport.findUnique.mockResolvedValue(null);
     storage.uploadFile.mockResolvedValue("statements/user-1/object.pdf");
     statementImport.create.mockResolvedValue({
@@ -292,7 +328,11 @@ describe("CardStatementsService", () => {
     const errorSpy = jest.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
 
     await expect(
-      service.createImport("user-1", {}, buildFile("%PDF-crash")),
+      service.createImport(
+        "user-1",
+        { creditCardId: "card-1" },
+        buildFile("%PDF-crash"),
+      ),
     ).resolves.toMatchObject({
       status: StatementImportStatus.FAILED,
       failureCode: "STATEMENT_PROCESSING_FAILED",
@@ -444,6 +484,129 @@ describe("CardStatementsService", () => {
       service.confirm("user-1", "import-1", { version: 2 }),
     ).rejects.toThrow("cannot be included as an expense");
     expect(tx.expense.createMany).not.toHaveBeenCalled();
+  });
+
+  describe("setPaidStatus", () => {
+    it("marks an import paid and stamps paidAt", async () => {
+      statementImport.findFirst
+        .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.CONFIRMED, 3),
+          isPaid: true,
+          paidAt: new Date("2026-08-15T00:00:00.000Z"),
+          reconciliation: null,
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      statementImport.update.mockResolvedValue({});
+
+      const result = await service.setPaidStatus("user-1", "import-1", true);
+
+      expect(statementImport.update).toHaveBeenCalledWith({
+        where: { id: "import-1" },
+        data: {
+          isPaid: true,
+          paidAt: expect.any(Date),
+        },
+      });
+      expect(result).toMatchObject({ isPaid: true });
+      expect(result.paidAt).not.toBeNull();
+    });
+
+    it("marks an import unpaid and clears paidAt", async () => {
+      statementImport.findFirst
+        .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.CONFIRMED, 3),
+          isPaid: false,
+          paidAt: null,
+          reconciliation: null,
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      statementImport.update.mockResolvedValue({});
+
+      const result = await service.setPaidStatus("user-1", "import-1", false);
+
+      expect(statementImport.update).toHaveBeenCalledWith({
+        where: { id: "import-1" },
+        data: {
+          isPaid: false,
+          paidAt: null,
+        },
+      });
+      expect(result).toMatchObject({ isPaid: false, paidAt: null });
+    });
+
+    it("throws NotFoundException for a nonexistent or unowned import", async () => {
+      statementImport.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.setPaidStatus("user-1", "someone-elses-import", true),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(statementImport.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("remove", () => {
+    it("deletes a non-confirmed import and cleans up its stored PDF", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.NEEDS_REVIEW, 2, "object-key"),
+      );
+      storage.deleteFile.mockResolvedValue(undefined);
+      statementImport.updateMany.mockResolvedValue({ count: 1 });
+      statementImport.delete = jest.fn().mockResolvedValue({});
+
+      const result = await service.remove("user-1", "import-1");
+
+      expect(storage.deleteFile).toHaveBeenCalledWith("object-key");
+      expect(statementImport.delete).toHaveBeenCalledWith({
+        where: { id: "import-1" },
+      });
+      expect(result).toMatchObject({ message: expect.any(String) });
+    });
+
+    it("throws NotFoundException for a nonexistent or unowned import", async () => {
+      statementImport.findFirst.mockResolvedValue(null);
+      statementImport.delete = jest.fn();
+
+      await expect(
+        service.remove("user-1", "someone-elses-import"),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(statementImport.delete).not.toHaveBeenCalled();
+    });
+
+    it("blocks deletion of a confirmed import", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.CONFIRMED, 3, "object-key"),
+      );
+      statementImport.delete = jest.fn();
+
+      await expect(
+        service.remove("user-1", "import-1"),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(storage.deleteFile).not.toHaveBeenCalled();
+      expect(statementImport.delete).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-premium user before any lookup", async () => {
+      const premiumError = new ForbiddenException({
+        code: "PREMIUM_REQUIRED",
+        message: "Premium subscription required",
+        feature: "statement_imports",
+        isPremium: false,
+      });
+      entitlements.assertPremium.mockRejectedValue(premiumError);
+
+      await expect(service.remove("user-1", "import-1")).rejects.toBe(
+        premiumError,
+      );
+      expect(statementImport.findFirst).not.toHaveBeenCalled();
+    });
   });
 
   function buildFile(contents: string): Express.Multer.File {

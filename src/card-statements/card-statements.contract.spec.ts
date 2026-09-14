@@ -2,6 +2,8 @@ import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import { StatementRowDecision, StatementRowKind } from "@prisma/client";
 import { ConfirmStatementImportDto } from "./dto/confirm-statement-import.dto";
+import { CreateStatementImportDto } from "./dto/create-statement-import.dto";
+import { MarkStatementPaidDto } from "./dto/mark-statement-paid.dto";
 import { QueryStatementImportsDto } from "./dto/query-statement-imports.dto";
 import { UpdateStatementRowsDto } from "./dto/update-statement-rows.dto";
 import {
@@ -48,6 +50,18 @@ describe("statement import contracts", () => {
     expect(await validate(dto)).not.toHaveLength(0);
   });
 
+  it("accepts a boolean paid-status update", async () => {
+    const dto = plainToInstance(MarkStatementPaidDto, { isPaid: true });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+  });
+
+  it("rejects a non-boolean paid-status update", async () => {
+    const dto = plainToInstance(MarkStatementPaidDto, { isPaid: "yes" });
+
+    expect(await validate(dto)).not.toHaveLength(0);
+  });
+
   it("bounds statement import pagination", async () => {
     const dto = plainToInstance(QueryStatementImportsDto, {
       page: "1",
@@ -55,6 +69,20 @@ describe("statement import contracts", () => {
     });
 
     expect(await validate(dto)).not.toHaveLength(0);
+  });
+
+  it("requires a credit card when creating a statement import", async () => {
+    const dto = plainToInstance(CreateStatementImportDto, {});
+
+    expect(await validate(dto)).not.toHaveLength(0);
+  });
+
+  it("accepts a statement import create request with a credit card", async () => {
+    const dto = plainToInstance(CreateStatementImportDto, {
+      creditCardId: "c6eb109b-a916-42f3-a312-c796086be90e",
+    });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
   });
 
   it("uses a dedicated ten-megabyte, single-file upload limit", () => {

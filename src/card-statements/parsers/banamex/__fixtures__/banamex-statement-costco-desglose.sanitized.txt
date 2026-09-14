@@ -1,0 +1,30 @@
+SYNTHETIC ANONYMIZED TEST FIXTURE
+Estado de Cuenta Mensual
+Tarjeta de Credito
+COSTCO BANAMEX
+Periodo: 22-jul-2026 al 21-ago-2026
+Fecha limite de pago: jueves, 10-sep-2026
+
+OPCIONES DE PAGO
+PAGO MINIMO $500.00
+PAGO MINIMO MAS COMPRAS A MESES SIN INTERESES $1,500.00
+PAGO PARA NO GENERAR INTERESES $8,000.00
+
+RESUMEN DE CARGOS Y ABONOS DEL PERIODO
+Adeudo del periodo anterior = $5,000.00
+Cargos regulares (no a meses) + $2,000.00
+Cargos compras a meses (capital)7 + $1,500.00
+Monto de Intereses8 + $400.00
+Monto de comisiones + $50.00
+IVA de Intereses y comisiones + $50.00
+Pagos y abonos - $1,000.00
+Monto de comisiones totales pagadas
+en los ultimos 12 meses: $ 650.00
+
+DESGLOSE DE MOVIMIENTOS
+TARJETA TITULAR TERMINACION 1111
+23/07/2026 24/07/2026 SUPERMERCADO CENTRAL $1,250.00
+25/07/2026 25/07/2026 PAGO RECIBIDO $1,000.00
+
+COMPRAS Y CARGOS DIFERIDOS A MESES CON INTERESES
+26-jul-2026 TIENDA ELECTRONICA 02 DE 06 $750.00

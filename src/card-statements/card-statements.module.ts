@@ -7,6 +7,8 @@ import { CardStatementsService } from "./card-statements.service";
 import { CardStatementProcessorService } from "./card-statement-processor.service";
 import { PdfTextExtractor } from "./extractors/pdf-text.extractor";
 import { BanamexStatementParser } from "./parsers/banamex/banamex-statement.parser";
+import { BbvaStatementParser } from "./parsers/bbva/bbva-statement.parser";
+import { RappiCardStatementParser } from "./parsers/rappicard/rappicard-statement.parser";
 
 @Module({
   imports: [PrismaModule, StorageModule],
@@ -17,6 +19,8 @@ import { BanamexStatementParser } from "./parsers/banamex/banamex-statement.pars
     CardStatementProcessorService,
     PdfTextExtractor,
     BanamexStatementParser,
+    RappiCardStatementParser,
+    BbvaStatementParser,
   ],
   exports: [CardStatementsService],
 })

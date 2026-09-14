@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -26,6 +27,7 @@ import { buildStatementUploadOptions } from "../common/upload/statement-upload.c
 import { CardStatementsService } from "./card-statements.service";
 import { ConfirmStatementImportDto } from "./dto/confirm-statement-import.dto";
 import { CreateStatementImportDto } from "./dto/create-statement-import.dto";
+import { MarkStatementPaidDto } from "./dto/mark-statement-paid.dto";
 import { QueryStatementImportsDto } from "./dto/query-statement-imports.dto";
 import { UpdateStatementRowsDto } from "./dto/update-statement-rows.dto";
 
@@ -88,7 +90,9 @@ export class CardStatementsController {
   }
 
   @Post(":id/process")
-  @ApiOperation({ summary: "Process or retry an uploaded Banamex statement" })
+  @ApiOperation({
+    summary: "Process or retry a Banamex or RappiCard statement",
+  })
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   process(
     @CurrentUser() user: CurrentUserType,
@@ -105,5 +109,24 @@ export class CardStatementsController {
     @Body() dto: ConfirmStatementImportDto,
   ) {
     return this.cardStatementsService.revert(user.id, id, dto);
+  }
+
+  @Patch(":id/paid")
+  @ApiOperation({ summary: "Mark a statement import as paid or not paid" })
+  setPaidStatus(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: MarkStatementPaidDto,
+  ) {
+    return this.cardStatementsService.setPaidStatus(user.id, id, dto.isPaid);
+  }
+
+  @Delete(":id")
+  @ApiOperation({ summary: "Delete a statement import and its stored PDF" })
+  remove(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+  ) {
+    return this.cardStatementsService.remove(user.id, id);
   }
 }

@@ -21,6 +21,14 @@ describe("BanamexStatementParser", () => {
     join(__dirname, "__fixtures__", "banamex-statement-costco.sanitized.txt"),
     "utf8",
   );
+  const costcoDesgloseFixture = readFileSync(
+    join(
+      __dirname,
+      "__fixtures__",
+      "banamex-statement-costco-desglose.sanitized.txt",
+    ),
+    "utf8",
+  );
 
   it("parses the sanitized section-based statement fixture", () => {
     const result = parser.parse({
@@ -69,6 +77,33 @@ describe("BanamexStatementParser", () => {
     expect(result.periodStart.toISOString()).toBe("2026-07-22T12:00:00.000Z");
     expect(result.periodEnd.toISOString()).toBe("2026-08-21T12:00:00.000Z");
     expect(result.rows.length).toBeGreaterThan(0);
+  });
+
+  it("parses the Costco layout that uses a 'DESGLOSE DE MOVIMIENTOS' section header and an interest-bearing installments section", () => {
+    const result = parser.parse({
+      text: costcoDesgloseFixture,
+      pages: [{ number: 1, text: costcoDesgloseFixture }],
+    });
+
+    expect(result.periodStart.toISOString()).toBe("2026-07-22T12:00:00.000Z");
+    expect(result.periodEnd.toISOString()).toBe("2026-08-21T12:00:00.000Z");
+    expect(
+      result.rows.filter((row) => row.section === StatementSection.CURRENT_CHARGES),
+    ).toHaveLength(2);
+    expect(result.reconciliation).toMatchObject({
+      status: StatementReconciliationStatus.PASSED,
+      openingBalance: 5000,
+      chargesTotal: 4000,
+      paymentsTotal: 1000,
+      closingBalance: 8000,
+    });
+    expect(result.financingPlans).toHaveLength(1);
+    expect(result.financingPlans[0]).toMatchObject({
+      type: StatementFinancingType.INTEREST_BEARING,
+      installmentNumber: 2,
+      installmentCount: 6,
+      installmentAmount: 750,
+    });
   });
 
   it("preserves repeated installments as separate source occurrences", () => {
