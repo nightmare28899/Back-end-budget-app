@@ -17,7 +17,7 @@ services:
             MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
             FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
         volumes:
-            - ${FIREBASE_SERVICE_ACCOUNT_PATH}:/run/secrets/firebase-service-account.json:ro
+            - ${FIREBASE_SERVICE_ACCOUNT_HOST_PATH}:/run/secrets/firebase-service-account.json:ro
 
     minio:
         image: minio/minio:latest
