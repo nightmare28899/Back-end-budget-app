@@ -8,6 +8,7 @@ export const creditCardPublicSelect = {
   creditLimit: true,
   closingDay: true,
   paymentDueDay: true,
+  currency: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,

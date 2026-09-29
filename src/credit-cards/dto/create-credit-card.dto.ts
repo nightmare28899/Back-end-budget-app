@@ -17,6 +17,13 @@ import {
 } from "../../common/dto/string-transformers";
 
 export class CreateCreditCardDto {
+  @ApiPropertyOptional({ example: "MXN", default: "MXN" })
+  @IsOptional()
+  @Transform(({ value }) => trimUpperCaseStringValue(value as unknown))
+  @IsString()
+  @Matches(/^[A-Z]{3}$/)
+  currency?: string;
+
   @ApiProperty({ example: "Nu" })
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()
