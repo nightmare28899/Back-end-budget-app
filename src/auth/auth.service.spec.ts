@@ -129,10 +129,12 @@ interface AuthSessionRow {
 
 function makeRefreshService(session: AuthSessionRow) {
   const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+  const findFirst = jest.fn().mockResolvedValue(session);
+  const signAsync = jest.fn().mockResolvedValue("signed-token");
   const prisma = {
     user: { findUnique: jest.fn().mockResolvedValue(activeUser) },
     authSession: {
-      findFirst: jest.fn().mockResolvedValue(session),
+      findFirst,
       updateMany,
     },
   };
@@ -145,7 +147,7 @@ function makeRefreshService(session: AuthSessionRow) {
       jti: "current-jti",
       type: "refresh",
     }),
-    signAsync: jest.fn().mockResolvedValue("signed-token"),
+    signAsync,
   };
 
   const config = {
@@ -160,7 +162,7 @@ function makeRefreshService(session: AuthSessionRow) {
     {} as unknown as FirebaseAdminService,
   );
 
-  return { service, updateMany };
+  return { service, updateMany, findFirst, signAsync };
 }
 
 describe("AuthService refreshToken concurrent rotation", () => {
@@ -188,6 +190,37 @@ describe("AuthService refreshToken concurrent rotation", () => {
       isAuthenticated: true,
     });
     expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it("recovers when a concurrent rotation wins after the initial session read", async () => {
+    const rotatedSession = {
+      currentRefreshTokenId: "new-jti",
+      previousRefreshTokenId: "current-jti",
+      previousRefreshTokenExpiresAt: new Date(Date.now() + 10_000),
+    };
+    const { service, updateMany, findFirst, signAsync } =
+      makeRefreshService(rotatedSession);
+    findFirst.mockResolvedValueOnce({
+      currentRefreshTokenId: "current-jti",
+      previousRefreshTokenId: null,
+      previousRefreshTokenExpiresAt: null,
+    });
+    updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(service.refreshToken("token")).resolves.toMatchObject({
+      isAuthenticated: true,
+    });
+    expect(findFirst).toHaveBeenCalledTimes(2);
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(signAsync).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        jti: "new-jti",
+        sid: "session-1",
+        type: "refresh",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("rejects a stale refresh token once the grace window has expired", async () => {

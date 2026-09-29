@@ -555,7 +555,25 @@ export class AuthService {
       });
 
       if (rotatedSession.count === 0) {
-        throw new UnauthorizedException("Invalid refresh token");
+        if (!options?.previousRefreshTokenId) {
+          throw new UnauthorizedException("Invalid refresh token");
+        }
+
+        const sessionState = await this.assertActiveSession(
+          userId,
+          sessionId,
+          options.previousRefreshTokenId,
+        );
+        if (!sessionState.isGraceReplay) {
+          throw new UnauthorizedException("Invalid refresh token");
+        }
+
+        return this.generateTokens(
+          userId,
+          email,
+          sessionId,
+          sessionState.activeRefreshTokenId,
+        );
       }
     } else {
       const session = await this.prisma.authSession.create({
