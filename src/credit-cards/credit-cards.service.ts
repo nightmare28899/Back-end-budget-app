@@ -353,8 +353,13 @@ export class CreditCardsService {
         (statement) => statement.paymentSummary.currency === card.currency,
       );
       const [latestStatement, previousStatement] = matchingStatements;
-      const statementBalance =
-        latestStatement?.paymentSummary.remainingStatement ?? 0;
+      // What is still due can never be less than what the statement asks to
+      // pay now: some issuers put installment charges in the no-interest
+      // target without including them in the closing balance.
+      const statementBalance = Math.max(
+        latestStatement?.paymentSummary.remainingStatement ?? 0,
+        latestStatement?.paymentSummary.currentPaymentDue ?? 0,
+      );
       const statementPeriodEnd = latestStatement?.periodEnd
         ? this.utcDayEnd(latestStatement.periodEnd)
         : null;

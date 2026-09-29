@@ -284,6 +284,26 @@ describe("CreditCardsService", () => {
     expect(result.cards[0].nextPayment?.amount).toBe(175);
   });
 
+  it("never projects less debt than the current payment due", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 4199.31,
+        paidAmount: 4199.31,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 10651.6,
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.currentPaymentDue).toBe(6452.29);
+    expect(card.statementSummary.remainingStatement).toBe(6452.29);
+    expect(card.creditStatus.owedBalance).toBe(6452.29);
+    expect(card.statementSummary.projectedTotalDebt).toBe(6452.29);
+  });
+
   it("falls back to closing balance for the current payment due", async () => {
     statementImportFindMany.mockResolvedValue([
       statement({
