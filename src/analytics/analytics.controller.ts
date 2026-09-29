@@ -13,6 +13,7 @@ import { DailyTotalsQueryDto } from "./dto/daily-totals-query.dto";
 import { AnalyticsSummaryQueryDto } from "./dto/analytics-summary-query.dto";
 import { CategoryBreakdownQueryDto } from "./dto/category-breakdown-query.dto";
 import { AnalyticsInsightsQueryDto } from "./dto/analytics-insights-query.dto";
+import { CardExpenseBreakdownQueryDto } from "./dto/card-expense-breakdown-query.dto";
 
 @ApiTags("Analytics")
 @ApiBearerAuth()
@@ -20,6 +21,19 @@ import { AnalyticsInsightsQueryDto } from "./dto/analytics-insights-query.dto";
 @Controller("analytics")
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
+
+  @Get("cards")
+  @ApiOperation({ summary: "Get expense totals grouped by credit card and currency" })
+  async getCardExpenseBreakdown(
+    @CurrentUser() user: CurrentUserType,
+    @Query() query: CardExpenseBreakdownQueryDto,
+  ) {
+    return this.analyticsService.getCardExpenseBreakdown(
+      user.id,
+      query.from,
+      query.to,
+    );
+  }
 
   @Get("daily")
   @ApiOperation({

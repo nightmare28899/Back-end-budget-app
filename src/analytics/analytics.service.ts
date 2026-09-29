@@ -118,9 +118,139 @@ export interface AnalyticsInsights {
   subscriptionSavings: AnalyticsSubscriptionSavings;
 }
 
+export interface CardExpenseBreakdown {
+  from: string;
+  to: string;
+  totalCount: number;
+  currencyBreakdown: Array<{ currency: string; total: number }>;
+  groups: Array<{
+    creditCardId: string | null;
+    card: {
+      id: string;
+      name: string;
+      bank: string;
+      brand: string;
+      last4: string;
+    } | null;
+    expenseCount: number;
+    totalsByCurrency: Array<{ currency: string; total: number }>;
+  }>;
+}
+
 @Injectable()
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async getCardExpenseBreakdown(
+    userId: string,
+    from: string,
+    to: string,
+  ): Promise<CardExpenseBreakdown> {
+    const now = new Date();
+    const rangeStart = new Date(`${from}T00:00:00.000Z`);
+    const requestedEnd = new Date(`${to}T23:59:59.999Z`);
+    const rangeEnd = requestedEnd.getTime() <= now.getTime() ? requestedEnd : now;
+    const aggregateRows = await this.prisma.expense.groupBy({
+      by: ["creditCardId", "currency"],
+      where: {
+        userId,
+        date: { gte: rangeStart, lte: rangeEnd },
+      },
+      _count: { _all: true },
+      _sum: { cost: true },
+    });
+    const cardIds = Array.from(
+      new Set(
+        aggregateRows
+          .map((row) => row.creditCardId)
+          .filter((cardId): cardId is string => Boolean(cardId)),
+      ),
+    );
+    const cards = cardIds.length
+      ? await this.prisma.creditCard.findMany({
+          where: { userId, id: { in: cardIds } },
+          select: {
+            id: true,
+            name: true,
+            bank: true,
+            brand: true,
+            last4: true,
+          },
+        })
+      : [];
+    const cardsById = new Map(cards.map((card) => [card.id, card]));
+    const grouped = new Map<
+      string,
+      CardExpenseBreakdown["groups"][number]
+    >();
+    const currencyTotals = new Map<string, number>();
+
+    for (const row of aggregateRows) {
+      const ownedCard = row.creditCardId
+        ? cardsById.get(row.creditCardId) ?? null
+        : null;
+      const groupKey = ownedCard?.id ?? "no-card";
+      const group = grouped.get(groupKey) ?? {
+        creditCardId: ownedCard?.id ?? null,
+        card: ownedCard,
+        expenseCount: 0,
+        totalsByCurrency: [],
+      };
+      const expenseCount = row._count._all;
+      const total = Number(row._sum.cost ?? 0);
+      const existingCurrencyTotal = group.totalsByCurrency.find(
+        (item) => item.currency === row.currency,
+      );
+
+      group.expenseCount += expenseCount;
+      if (existingCurrencyTotal) {
+        existingCurrencyTotal.total = this.roundMoney(
+          existingCurrencyTotal.total + total,
+        );
+      } else {
+        group.totalsByCurrency.push({
+          currency: row.currency,
+          total: this.roundMoney(total),
+        });
+      }
+      grouped.set(groupKey, group);
+      currencyTotals.set(
+        row.currency,
+        (currencyTotals.get(row.currency) ?? 0) + total,
+      );
+    }
+
+    const groups = Array.from(grouped.values())
+      .map((group) => ({
+        ...group,
+        totalsByCurrency: group.totalsByCurrency.sort((left, right) =>
+          left.currency.localeCompare(right.currency),
+        ),
+      }))
+      .sort((left, right) => {
+        if (!left.card) return 1;
+        if (!right.card) return -1;
+        return (
+          left.card.name.localeCompare(right.card.name) ||
+          left.card.bank.localeCompare(right.card.bank) ||
+          left.card.last4.localeCompare(right.card.last4) ||
+          left.card.id.localeCompare(right.card.id)
+        );
+      });
+
+    return {
+      from,
+      to,
+      totalCount: groups.reduce((sum, group) => sum + group.expenseCount, 0),
+      currencyBreakdown: Array.from(currencyTotals.entries())
+        .map(([currency, total]) => ({
+          currency,
+          total: this.roundMoney(total),
+        }))
+        .sort((left, right) => left.currency.localeCompare(right.currency)),
+      groups,
+    };
+  }
 
   async getDailyTotals(userId: string, days = 7, endDate?: string) {
     const safeDays = Math.max(days, 1);
