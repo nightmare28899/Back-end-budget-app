@@ -23,6 +23,7 @@ import type { CurrentUserType } from "../common/types/current-user.type";
 import { CreateSubscriptionDto } from "./dto/create-subscription.dto";
 import { UpcomingSubscriptionsQueryDto } from "./dto/upcoming-subscriptions-query.dto";
 import { UpdateSubscriptionDto } from "./dto/update-subscription.dto";
+import { LinkExpensesDto } from "./dto/link-expenses.dto";
 import { SubscriptionsService } from "./subscriptions.service";
 import { SubscriptionsWorkerService } from "./subscriptions.worker.service";
 
@@ -104,6 +105,30 @@ export class SubscriptionsController {
     return this.subscriptionsService.update(id, user.id, dto);
   }
 
+  @Post(":id/link-expenses")
+  @ApiOperation({
+    summary: "Attach existing expenses to this subscription plan",
+  })
+  async linkExpenses(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+    @Body() dto: LinkExpensesDto,
+  ) {
+    return this.subscriptionsService.linkExpenses(id, user.id, dto);
+  }
+
+  @Post(":id/unlink-expenses")
+  @ApiOperation({
+    summary: "Detach expenses previously attached to this subscription plan",
+  })
+  async unlinkExpenses(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+    @Body() dto: LinkExpensesDto,
+  ) {
+    return this.subscriptionsService.unlinkExpenses(id, user.id, dto);
+  }
+
   @Delete(":id")
   @ApiOperation({ summary: "Deactivate (cancel) a subscription" })
   async remove(
@@ -111,5 +136,14 @@ export class SubscriptionsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.subscriptionsService.remove(id, user.id);
+  }
+
+  @Delete(":id/permanent")
+  @ApiOperation({ summary: "Permanently delete a subscription plan" })
+  async removePermanently(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.subscriptionsService.deletePermanently(id, user.id);
   }
 }

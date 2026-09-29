@@ -7,6 +7,7 @@ import { BillingCycle, PaymentMethod, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateSubscriptionDto } from "./dto/create-subscription.dto";
 import { UpdateSubscriptionDto } from "./dto/update-subscription.dto";
+import { LinkExpensesDto } from "./dto/link-expenses.dto";
 import { CreditCardsService } from "../credit-cards/credit-cards.service";
 import { creditCardPublicSelect } from "../credit-cards/credit-card.select";
 import { normalizePaymentMethod } from "../common/payments/payment-method.utils";
@@ -183,6 +184,43 @@ export class SubscriptionsService {
     });
   }
 
+  // Expense.subscriptionId/isSubscription already exist on the schema as a
+  // real FK, but nothing ever set them — the frontend was matching charge
+  // groups to subscriptions by name instead. This is the write side of that
+  // link: it never creates data, only attaches/detaches already-existing
+  // expenses (each userId-scoped) to a subscription the caller owns.
+  async linkExpenses(id: string, userId: string, dto: LinkExpensesDto) {
+    await this.findOne(id, userId);
+
+    const owned = await this.prisma.expense.findMany({
+      where: { id: { in: dto.expenseIds }, userId },
+      select: { id: true },
+    });
+    if (owned.length !== dto.expenseIds.length) {
+      throw new BadRequestException(
+        "One or more expenses were not found for this user",
+      );
+    }
+
+    await this.prisma.expense.updateMany({
+      where: { id: { in: dto.expenseIds }, userId },
+      data: { subscriptionId: id, isSubscription: true },
+    });
+
+    return { message: "Expenses linked to subscription", linkedCount: owned.length };
+  }
+
+  async unlinkExpenses(id: string, userId: string, dto: LinkExpensesDto) {
+    await this.findOne(id, userId);
+
+    const result = await this.prisma.expense.updateMany({
+      where: { id: { in: dto.expenseIds }, userId, subscriptionId: id },
+      data: { subscriptionId: null, isSubscription: false },
+    });
+
+    return { message: "Expenses unlinked from subscription", unlinkedCount: result.count };
+  }
+
   async remove(id: string, userId: string) {
     const existing = await this.findOne(id, userId);
 
@@ -202,6 +240,12 @@ export class SubscriptionsService {
       message: "Subscription deactivated successfully",
       subscription,
     };
+  }
+
+  async deletePermanently(id: string, userId: string) {
+    await this.findOne(id, userId);
+    await this.prisma.subscription.delete({ where: { id } });
+    return { message: "Subscription deleted permanently" };
   }
 
   async getMonthlyProjection(userId: string): Promise<MonthlyProjectionResult> {
