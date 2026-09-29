@@ -237,7 +237,7 @@ model Expense {
   userId                      String
   createdAt                   DateTime              @default(now())
   updatedAt                   DateTime              @updatedAt
-  category                    Category?             @relation(fields: [categoryId], references: [id])
+  category                    Category?             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   creditCard                  CreditCard?           @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   subscription                Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   statementRow                StatementRow?         @relation(fields: [statementRowId], references: [id], onDelete: SetNull)
@@ -317,7 +317,7 @@ model StatementRow {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
   statementImport    StatementImport      @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
-  category           Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category           Category?            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   linkedCreditCard   CreditCard?          @relation("StatementRowCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
   financingPlan      StatementFinancingPlan? @relation(fields: [financingPlanId], references: [id], onDelete: SetNull)
   expense            Expense?
@@ -447,7 +447,7 @@ model Subscription {
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   creditCard          CreditCard?   @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
-  category            Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category            Category?     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   expenses            Expense[]
   user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
