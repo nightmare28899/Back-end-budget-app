@@ -147,6 +147,7 @@ describe("RappiCardStatementParser", () => {
       StatementPaymentTargetKind.NO_INTEREST,
     ]);
     expect(result.reconciliation).toMatchObject({
+      currency: "MXN",
       openingBalance: 500,
       chargesTotal: 1150,
       paymentsTotal: 200,
@@ -162,6 +163,12 @@ describe("RappiCardStatementParser", () => {
 
     expect(result.periodStart.toISOString()).toBe("2026-07-16T12:00:00.000Z");
     expect(result.periodEnd.toISOString()).toBe("2026-08-15T12:00:00.000Z");
+    expect(
+      result.paymentTargets.every(
+        (target) =>
+          target.dueDate?.toISOString() === "2026-09-04T12:00:00.000Z",
+      ),
+    ).toBe(true);
 
     expect(
       result.rows.filter((row) => row.section === StatementSection.CURRENT_CHARGES),
@@ -191,6 +198,7 @@ describe("RappiCardStatementParser", () => {
     ]);
 
     expect(result.reconciliation).toMatchObject({
+      currency: "MXN",
       status: StatementReconciliationStatus.PASSED,
       openingBalance: 5000,
       chargesTotal: 2500,

@@ -92,7 +92,7 @@ export class BanamexStatementParser implements StatementParser {
       periodStart: period.start,
       periodEnd: period.end,
       warningCount,
-      reconciliation,
+      reconciliation: { ...reconciliation, currency: "MXN" },
       instruments: parsedSections.instruments,
       financingPlans: parsedSections.financingPlans,
       paymentTargets,

@@ -30,10 +30,15 @@ import {
   UpdateStatementRowsDto,
 } from "./dto/update-statement-rows.dto";
 import { StatementProcessingError } from "./parsers/statement-parser.interface";
+import { MarkStatementPaidDto } from "./dto/mark-statement-paid.dto";
+import { StatementPaymentsService } from "./statement-payments.service";
 
 const PDF_SIGNATURE = "%PDF-";
 const DEFAULT_PAGE_SIZE = 20;
 const STATEMENT_IMPORT_FEATURE = "statement_imports";
+const STATEMENT_CYCLE_CONFLICT_CODE = "STATEMENT_CYCLE_CONFLICT";
+const STATEMENT_CYCLE_CONFLICT_MESSAGE =
+  "A statement import already owns this card billing cycle";
 const ALLOWED_EXPENSE_KINDS = new Set<StatementRowKind>([
   StatementRowKind.CHARGE,
   StatementRowKind.INTEREST,
@@ -64,6 +69,7 @@ export class CardStatementsService {
     private readonly storageService: StorageService,
     private readonly statementProcessor: CardStatementProcessorService,
     private readonly entitlementsService: EntitlementsService,
+    private readonly statementPaymentsService: StatementPaymentsService,
   ) {}
 
   async createImport(
@@ -215,7 +221,7 @@ export class CardStatementsService {
       ...(query.creditCardId ? { creditCardId: query.creditCardId } : {}),
     };
 
-    const [items, total] = await this.prisma.$transaction([
+    const [rawItems, total] = await this.prisma.$transaction([
       this.prisma.statementImport.findMany({
         where,
         orderBy: { createdAt: "desc" },
@@ -236,12 +242,39 @@ export class CardStatementsService {
           revertedAt: true,
           isPaid: true,
           paidAt: true,
+          paidAmount: true,
+          paymentStatus: true,
+          paymentVersion: true,
+          reconciliation: {
+            select: { closingBalance: true, currency: true, status: true },
+          },
+          paymentTargets: {
+            orderBy: { position: "asc" },
+            select: {
+              kind: true,
+              amount: true,
+              currency: true,
+              dueDate: true,
+              position: true,
+            },
+          },
+          payments: {
+            select: { amount: true, currency: true, voidedAt: true },
+          },
           createdAt: true,
           updatedAt: true,
         },
       }),
       this.prisma.statementImport.count({ where }),
     ]);
+    const items = rawItems.map(({ paymentTargets, payments, ...item }) => ({
+      ...item,
+      paymentSummary: this.statementPaymentsService.summarize({
+        reconciliation: item.reconciliation,
+        paymentTargets,
+        payments,
+      }),
+    }));
 
     return {
       items,
@@ -265,10 +298,14 @@ export class CardStatementsService {
             bank: true,
             brand: true,
             last4: true,
+            currency: true,
           },
         },
         reconciliation: true,
         paymentTargets: { orderBy: { position: "asc" } },
+        payments: {
+          orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+        },
         instruments: {
           orderBy: { position: "asc" },
           include: {
@@ -295,9 +332,19 @@ export class CardStatementsService {
       throw new NotFoundException("Statement import not found");
     }
 
-    const { sourceObjectKey, ...publicImport } = statementImport;
+    const { sourceObjectKey, rows, payments, ...publicImport } = statementImport;
+    const publicRows = rows.map(({ rawText, ...row }) => {
+      void rawText;
+      return { ...row, isAdjusted: this.hasAccountingAdjustment(row) };
+    });
     return {
       ...publicImport,
+      paymentSummary: this.statementPaymentsService.summarize(
+        statementImport,
+      ),
+      paymentHistory: payments,
+      rows: publicRows,
+      adjustmentCount: publicRows.filter((row) => row.isAdjusted).length,
       sourceStored: Boolean(sourceObjectKey),
     };
   }
@@ -319,153 +366,176 @@ export class CardStatementsService {
 
     this.assertParsedStatementShape(parsed);
 
-    await this.prisma.$transaction(async (tx) => {
-      await this.assertOwnedReferences(
-        tx,
-        userId,
-        parsed.rows.map((row) => row.categoryId),
-        [
-          statementImport.creditCardId,
-          ...parsed.rows.map((row) => row.linkedCreditCardId),
-          ...parsed.instruments.map(
-            (instrument) => instrument.linkedCreditCardId,
-          ),
-        ],
-      );
-
-      await tx.statementRow.deleteMany({ where: { statementImportId: id } });
-      await tx.statementFinancingPlan.deleteMany({
-        where: { statementImportId: id },
-      });
-      await tx.statementInstrumentSnapshot.deleteMany({
-        where: { statementImportId: id },
-      });
-      await tx.statementPaymentTarget.deleteMany({
-        where: { statementImportId: id },
-      });
-      await tx.statementReconciliation.deleteMany({
-        where: { statementImportId: id },
-      });
-
-      const instrumentIds = new Map<number, string>();
-      for (const instrument of parsed.instruments) {
-        const created = await tx.statementInstrumentSnapshot.create({
-          data: {
-            statementImportId: id,
-            position: instrument.position,
-            label: instrument.label,
-            kind: instrument.kind,
-            last4: instrument.last4,
-            linkedCreditCardId: instrument.linkedCreditCardId,
-          },
-          select: { id: true },
-        });
-        instrumentIds.set(instrument.position, created.id);
-      }
-
-      const financingPlanIds = new Map<number, string>();
-      for (const plan of parsed.financingPlans) {
-        const created = await tx.statementFinancingPlan.create({
-          data: {
-            statementImportId: id,
-            instrumentSnapshotId:
-              plan.instrumentPosition === null ||
-              plan.instrumentPosition === undefined
-                ? null
-                : instrumentIds.get(plan.instrumentPosition),
-            type: plan.type,
-            merchantName: plan.merchantName,
-            purchaseDate: plan.purchaseDate,
-            originalAmount: plan.originalAmount,
-            installmentAmount: plan.installmentAmount,
-            installmentNumber: plan.installmentNumber,
-            installmentCount: plan.installmentCount,
-            remainingAmount: plan.remainingAmount,
-            currency: plan.currency,
-            sourceRowNumber: plan.sourceRowNumber,
-            position: plan.position,
-          },
-          select: { id: true },
-        });
-        financingPlanIds.set(plan.position, created.id);
-      }
-
-      if (parsed.paymentTargets.length > 0) {
-        await tx.statementPaymentTarget.createMany({
-          data: parsed.paymentTargets.map((target) => ({
-            statementImportId: id,
-            kind: target.kind,
-            label: target.label,
-            amount: target.amount,
-            currency: target.currency,
-            dueDate: target.dueDate,
-            sourceRowNumber: target.sourceRowNumber,
-            position: target.position,
-          })),
-        });
-      }
-
-      if (parsed.rows.length > 0) {
-        await tx.statementRow.createMany({
-          data: parsed.rows.map((row) => ({
-            statementImportId: id,
-            occurrenceKey: row.occurrenceKey,
-            section: row.section,
-            sourceRowNumber: row.sourceRowNumber,
-            position: row.position,
-            transactionDate: row.transactionDate,
-            description: row.description,
-            merchantName: row.merchantName,
-            amount: row.amount,
-            currency: row.currency,
-            kind: row.kind,
-            decision: row.decision ?? StatementRowDecision.PENDING,
-            categoryId: row.categoryId,
-            linkedCreditCardId: row.linkedCreditCardId,
-            financingPlanId:
-              row.financingPlanPosition === null ||
-              row.financingPlanPosition === undefined
-                ? null
-                : financingPlanIds.get(row.financingPlanPosition),
-            warningCodes: row.warningCodes,
-            rawText: row.rawText,
-          })),
-        });
-      }
-
-      await tx.statementReconciliation.create({
-        data: {
-          statementImportId: id,
-          ...parsed.reconciliation,
-        },
-      });
-
-      const updated = await tx.statementImport.updateMany({
-        where: {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await this.assertNoDuplicateCycle(tx, {
           id,
           userId,
-          version: statementImport.version,
-          status: {
-            in: [StatementImportStatus.UPLOADED, StatementImportStatus.FAILED],
-          },
-        },
-        data: {
-          status: StatementImportStatus.NEEDS_REVIEW,
+          creditCardId: statementImport.creditCardId,
           periodStart: parsed.periodStart,
           periodEnd: parsed.periodEnd,
-          parserVersion: parsed.parserVersion,
-          warningCount: parsed.warningCount,
-          parsedAt: new Date(),
-          failureCode: null,
-          failureMessage: null,
-          version: { increment: 1 },
-        },
-      });
+        });
+        await this.assertOwnedReferences(
+          tx,
+          userId,
+          parsed.rows.map((row) => row.categoryId),
+          [
+            statementImport.creditCardId,
+            ...parsed.rows.map((row) => row.linkedCreditCardId),
+            ...parsed.instruments.map(
+              (instrument) => instrument.linkedCreditCardId,
+            ),
+          ],
+        );
 
-      if (updated.count !== 1) {
-        throw new ConflictException("Statement import changed during parsing");
+        await tx.statementRow.deleteMany({ where: { statementImportId: id } });
+        await tx.statementFinancingPlan.deleteMany({
+          where: { statementImportId: id },
+        });
+        await tx.statementInstrumentSnapshot.deleteMany({
+          where: { statementImportId: id },
+        });
+        await tx.statementPaymentTarget.deleteMany({
+          where: { statementImportId: id },
+        });
+        await tx.statementReconciliation.deleteMany({
+          where: { statementImportId: id },
+        });
+
+        const instrumentIds = new Map<number, string>();
+        for (const instrument of parsed.instruments) {
+          const created = await tx.statementInstrumentSnapshot.create({
+            data: {
+              statementImportId: id,
+              position: instrument.position,
+              label: instrument.label,
+              kind: instrument.kind,
+              last4: instrument.last4,
+              linkedCreditCardId: instrument.linkedCreditCardId,
+            },
+            select: { id: true },
+          });
+          instrumentIds.set(instrument.position, created.id);
+        }
+
+        const financingPlanIds = new Map<number, string>();
+        for (const plan of parsed.financingPlans) {
+          const created = await tx.statementFinancingPlan.create({
+            data: {
+              statementImportId: id,
+              instrumentSnapshotId:
+                plan.instrumentPosition === null ||
+                plan.instrumentPosition === undefined
+                  ? null
+                  : instrumentIds.get(plan.instrumentPosition),
+              type: plan.type,
+              merchantName: plan.merchantName,
+              purchaseDate: plan.purchaseDate,
+              originalAmount: plan.originalAmount,
+              installmentAmount: plan.installmentAmount,
+              installmentNumber: plan.installmentNumber,
+              installmentCount: plan.installmentCount,
+              remainingAmount: plan.remainingAmount,
+              currency: plan.currency,
+              sourceRowNumber: plan.sourceRowNumber,
+              position: plan.position,
+            },
+            select: { id: true },
+          });
+          financingPlanIds.set(plan.position, created.id);
+        }
+
+        if (parsed.paymentTargets.length > 0) {
+          await tx.statementPaymentTarget.createMany({
+            data: parsed.paymentTargets.map((target) => ({
+              statementImportId: id,
+              kind: target.kind,
+              label: target.label,
+              amount: target.amount,
+              currency: target.currency,
+              dueDate: target.dueDate,
+              sourceRowNumber: target.sourceRowNumber,
+              position: target.position,
+            })),
+          });
+        }
+
+        if (parsed.rows.length > 0) {
+          await tx.statementRow.createMany({
+            data: parsed.rows.map((row) => ({
+              statementImportId: id,
+              occurrenceKey: row.occurrenceKey,
+              section: row.section,
+              sourceRowNumber: row.sourceRowNumber,
+              position: row.position,
+              transactionDate: row.transactionDate,
+              description: row.description,
+              merchantName: row.merchantName,
+              amount: row.amount,
+              currency: row.currency,
+              kind: row.kind,
+              parsedTransactionDate: row.transactionDate,
+              parsedAmount: row.amount,
+              parsedCurrency: row.currency,
+              parsedKind: row.kind,
+              decision: row.decision ?? StatementRowDecision.PENDING,
+              categoryId: row.categoryId,
+              linkedCreditCardId: row.linkedCreditCardId,
+              financingPlanId:
+                row.financingPlanPosition === null ||
+                row.financingPlanPosition === undefined
+                  ? null
+                  : financingPlanIds.get(row.financingPlanPosition),
+              warningCodes: row.warningCodes,
+              rawText: row.rawText,
+            })),
+          });
+        }
+
+        await tx.statementReconciliation.create({
+          data: {
+            statementImportId: id,
+            ...parsed.reconciliation,
+          },
+        });
+
+        const updated = await tx.statementImport.updateMany({
+          where: {
+            id,
+            userId,
+            version: statementImport.version,
+            status: {
+              in: [
+                StatementImportStatus.UPLOADED,
+                StatementImportStatus.FAILED,
+              ],
+            },
+          },
+          data: {
+            status: StatementImportStatus.NEEDS_REVIEW,
+            periodStart: parsed.periodStart,
+            periodEnd: parsed.periodEnd,
+            parserVersion: parsed.parserVersion,
+            warningCount: parsed.warningCount,
+            parsedAt: new Date(),
+            failureCode: null,
+            failureMessage: null,
+            version: { increment: 1 },
+          },
+        });
+
+        if (updated.count !== 1) {
+          throw new ConflictException(
+            "Statement import changed during parsing",
+          );
+        }
+      });
+    } catch (error) {
+      if (this.isStatementCycleConstraintError(error)) {
+        throw this.statementCycleConflict();
       }
-    });
+      throw error;
+    }
 
     return this.findOne(userId, id);
   }
@@ -490,7 +560,6 @@ export class CardStatementsService {
     await this.prisma.$transaction(async (tx) => {
       const ownedRows = await tx.statementRow.findMany({
         where: { statementImportId: id, id: { in: rowIds } },
-        select: { id: true },
       });
       if (ownedRows.length !== rowIds.length) {
         throw new BadRequestException(
@@ -499,6 +568,17 @@ export class CardStatementsService {
       }
 
       for (const row of dto.rows) {
+        const currentRow = ownedRows.find((ownedRow) => ownedRow.id === row.id);
+        if (!currentRow) {
+          throw new BadRequestException(
+            "One or more statement rows do not belong to this import",
+          );
+        }
+        const projectedRow = {
+          ...currentRow,
+          ...this.buildRowUpdate(row),
+        };
+        this.assertAdjustmentJustified(projectedRow);
         await tx.statementRow.update({
           where: { id: row.id },
           data: this.buildRowUpdate(row),
@@ -585,6 +665,7 @@ export class CardStatementsService {
           "All statement rows must be reviewed before confirmation",
         );
       }
+      current.rows.forEach((row) => this.assertAdjustmentJustified(row));
 
       const candidates = current.rows.filter(
         (row) => row.decision === StatementRowDecision.INCLUDE_EXPENSE,
@@ -703,12 +784,51 @@ export class CardStatementsService {
     };
   }
 
+  async resume(userId: string, id: string, dto: ConfirmStatementImportDto) {
+    await this.assertPremium(userId);
+
+    const statementImport = await this.findOwnedImport(userId, id);
+    if (statementImport.status !== StatementImportStatus.REVERTED) {
+      throw new ConflictException("Only reverted imports can be resumed");
+    }
+    if (statementImport.version !== dto.version) {
+      throw new ConflictException("Statement import version is stale");
+    }
+
+    const claimed = await this.prisma.statementImport.updateMany({
+      where: {
+        id,
+        userId,
+        version: dto.version,
+        status: StatementImportStatus.REVERTED,
+      },
+      data: {
+        status: StatementImportStatus.NEEDS_REVIEW,
+        revertedAt: null,
+        version: { increment: 1 },
+      },
+    });
+    if (claimed.count !== 1) {
+      throw new ConflictException("Statement import version is stale");
+    }
+
+    return this.findOne(userId, id);
+  }
+
   async remove(userId: string, id: string) {
     await this.assertPremium(userId);
 
     const statementImport = await this.findOwnedImport(userId, id);
     if (statementImport.status === StatementImportStatus.CONFIRMED) {
       throw new ConflictException("Revert this statement before deleting it.");
+    }
+    const paymentCount = await this.prisma.statementPayment.count({
+      where: { statementImportId: id },
+    });
+    if (paymentCount > 0) {
+      throw new ConflictException(
+        "Statements with payment history cannot be deleted",
+      );
     }
 
     await this.deleteStoredSource(userId, id, statementImport.sourceObjectKey);
@@ -717,19 +837,25 @@ export class CardStatementsService {
     return { message: "Statement import deleted" };
   }
 
-  async setPaidStatus(userId: string, id: string, isPaid: boolean) {
+  async setPaidStatus(
+    userId: string,
+    id: string,
+    dto: MarkStatementPaidDto,
+  ) {
     await this.assertPremium(userId);
-
-    await this.findOwnedImport(userId, id);
-
-    await this.prisma.statementImport.update({
-      where: { id },
-      data: {
-        isPaid,
-        paidAt: isPaid ? new Date() : null,
-      },
+    const statementImport = await this.findOwnedImport(userId, id);
+    if (!dto.isPaid) {
+      await this.statementPaymentsService.clearCompatibilityStatus(userId, id);
+      return this.findOne(userId, id);
+    }
+    if (dto.amount === undefined) {
+      throw new BadRequestException("Payment amount is required");
+    }
+    await this.statementPaymentsService.createCompatibilityPayment(userId, id, {
+      amount: dto.amount,
+      expectedVersion: dto.expectedVersion ?? statementImport.paymentVersion,
+      currency: dto.currency,
     });
-
     return this.findOne(userId, id);
   }
 
@@ -781,7 +907,7 @@ export class CardStatementsService {
         // generic message above, so this is the only place the real cause
         // is recoverable.
         this.logger.error(
-          `Unexpected error processing statement import ${id}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+          `Unexpected error processing statement import ${id}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
         );
       }
       await this.markProcessingFailed(userId, id, processingError);
@@ -877,7 +1003,7 @@ export class CardStatementsService {
         ? { linkedCreditCardId: row.linkedCreditCardId }
         : {}),
       ...(row.decisionNote !== undefined
-        ? { decisionNote: row.decisionNote }
+        ? { decisionNote: this.normalizeDecisionNote(row.decisionNote) }
         : {}),
     };
   }
@@ -1027,6 +1153,9 @@ export class CardStatementsService {
     if (!parsed.parserVersion.trim()) {
       throw new BadRequestException("Parser version is required");
     }
+    if (!/^[A-Z]{3}$/.test(parsed.reconciliation.currency)) {
+      throw new BadRequestException("Reconciliation currency is invalid");
+    }
     if (!Number.isInteger(parsed.warningCount) || parsed.warningCount < 0) {
       throw new BadRequestException(
         "Warning count must be a non-negative integer",
@@ -1140,8 +1269,132 @@ export class CardStatementsService {
     }
   }
 
-  private isUniqueConstraintError(error: unknown) {
+  private isStatementCycleConstraintError(error: unknown) {
+    if (
+      !this.isUniqueConstraintError(error) ||
+      !error.meta ||
+      typeof error.meta !== "object" ||
+      !("target" in error.meta)
+    ) {
+      return false;
+    }
+
+    const target = error.meta.target;
+    if (target === "statement_imports_user_card_period_key") {
+      return true;
+    }
+    if (!Array.isArray(target) || target.length !== 4) {
+      return false;
+    }
+
+    const cycleFields = new Set([
+      "userId",
+      "creditCardId",
+      "periodStart",
+      "periodEnd",
+    ]);
+    return (
+      new Set(target).size === cycleFields.size &&
+      target.every(
+        (field) => typeof field === "string" && cycleFields.has(field),
+      )
+    );
+  }
+
+  private isUniqueConstraintError(
+    error: unknown,
+  ): error is Error & { code: "P2002"; meta?: unknown } {
     return error instanceof Error && "code" in error && error.code === "P2002";
+  }
+
+  private async assertNoDuplicateCycle(
+    tx: Prisma.TransactionClient,
+    cycle: {
+      id: string;
+      userId: string;
+      creditCardId: string | null;
+      periodStart: Date;
+      periodEnd: Date;
+    },
+  ) {
+    if (!cycle.creditCardId) return;
+    const existing = await tx.statementImport.findFirst({
+      where: {
+        id: { not: cycle.id },
+        userId: cycle.userId,
+        creditCardId: cycle.creditCardId,
+        periodStart: cycle.periodStart,
+        periodEnd: cycle.periodEnd,
+      },
+      select: { id: true },
+    });
+    if (existing) throw this.statementCycleConflict();
+  }
+
+  private statementCycleConflict() {
+    return new ConflictException({
+      code: STATEMENT_CYCLE_CONFLICT_CODE,
+      message: STATEMENT_CYCLE_CONFLICT_MESSAGE,
+    });
+  }
+
+  private assertAdjustmentJustified(row: {
+    transactionDate?: Date | null;
+    amount?: Prisma.Decimal | number;
+    currency?: string;
+    kind?: StatementRowKind;
+    parsedTransactionDate?: Date | null;
+    parsedAmount?: Prisma.Decimal | number;
+    parsedCurrency?: string;
+    parsedKind?: StatementRowKind;
+    decisionNote?: string | null;
+  }) {
+    if (
+      this.hasAccountingAdjustment(row) &&
+      !this.normalizeDecisionNote(row.decisionNote)
+    ) {
+      throw new BadRequestException(
+        "Every accounting adjustment requires a decision note",
+      );
+    }
+  }
+
+  private hasAccountingAdjustment(row: {
+    transactionDate?: Date | null;
+    amount?: Prisma.Decimal | number;
+    currency?: string;
+    kind?: StatementRowKind;
+    parsedTransactionDate?: Date | null;
+    parsedAmount?: Prisma.Decimal | number;
+    parsedCurrency?: string;
+    parsedKind?: StatementRowKind;
+  }) {
+    if (
+      row.parsedAmount === undefined ||
+      row.parsedCurrency === undefined ||
+      row.parsedKind === undefined
+    ) {
+      return false;
+    }
+    const currentDate = row.transactionDate?.getTime() ?? null;
+    const parsedDate = row.parsedTransactionDate?.getTime() ?? null;
+    return (
+      currentDate !== parsedDate ||
+      !this.toPersistedMoney(row.amount ?? 0).equals(
+        this.toPersistedMoney(row.parsedAmount),
+      ) ||
+      row.currency !== row.parsedCurrency ||
+      row.kind !== row.parsedKind
+    );
+  }
+
+  private toPersistedMoney(value: Prisma.Decimal | number) {
+    return new Prisma.Decimal(value).toDecimalPlaces(2);
+  }
+
+  private normalizeDecisionNote(value?: string | null) {
+    const normalized = value?.trim();
+    return normalized ? normalized : null;
   }
 
   private assertPremium(userId: string) {

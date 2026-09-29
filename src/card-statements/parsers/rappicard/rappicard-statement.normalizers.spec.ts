@@ -9,6 +9,9 @@ describe("RappiCard statement normalizers", () => {
       ["01-ENE-2026", "2026-01-01T12:00:00.000Z"],
       ["29-feb-2024", "2024-02-29T12:00:00.000Z"],
       ["31-DIC-2026", "2026-12-31T12:00:00.000Z"],
+      // The real Banorte-issued RappiCard template prints September as the
+      // 4-letter "sept" instead of the 3-letter "sep" every other month uses.
+      ["15-sept-2026", "2026-09-15T12:00:00.000Z"],
       // Real transaction rows print plain numeric YYYY-MM-DD dates, distinct
       // from the DD-MMM-YYYY header/period format above — both must parse.
       ["2026-01-01", "2026-01-01T12:00:00.000Z"],

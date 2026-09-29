@@ -99,6 +99,18 @@ enum StatementPaymentTargetKind {
   OTHER
 }
 
+enum StatementPaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum StatementPaymentSource {
+  MANUAL
+  LEGACY_BACKFILL
+  CORRECTION
+}
+
 model User {
   id                   String          @id @default(uuid())
   email                String          @unique
@@ -131,6 +143,7 @@ model User {
   authSessions         AuthSession[]
   reportHistory        ReportHistory[]
   statementImports     StatementImport[]
+  statementPayments    StatementPayment[]
 
   @@map("users")
 }
@@ -179,6 +192,7 @@ model CreditCard {
   creditLimit   Decimal?       @db.Decimal(10, 2)
   closingDay    Int?
   paymentDueDay Int?
+  currency      String         @default("MXN")
   isActive      Boolean        @default(true)
   userId        String
   createdAt     DateTime       @default(now())
@@ -278,6 +292,9 @@ model StatementImport {
   revertedAt      DateTime?
   isPaid          Boolean               @default(false)
   paidAt          DateTime?
+  paidAmount      Decimal?              @db.Decimal(12, 2)
+  paymentStatus   StatementPaymentStatus @default(UNPAID)
+  paymentVersion  Int                    @default(0)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -287,11 +304,40 @@ model StatementImport {
   paymentTargets  StatementPaymentTarget[]
   financingPlans  StatementFinancingPlan[]
   instruments     StatementInstrumentSnapshot[]
+  payments        StatementPayment[]
 
   @@unique([userId, sourceSha256])
+  @@unique([userId, creditCardId, periodStart, periodEnd], map: "statement_imports_user_card_period_key")
   @@index([userId, status, createdAt])
   @@index([creditCardId])
   @@map("statement_imports")
+}
+
+model StatementPayment {
+  id                String                 @id @default(uuid())
+  userId            String
+  statementImportId String
+  amount            Decimal                @db.Decimal(12, 2)
+  currency          String
+  paidAt            DateTime
+  note              String?
+  source            StatementPaymentSource @default(MANUAL)
+  idempotencyKey    String?
+  supersedesId      String?
+  voidedAt          DateTime?
+  voidReason        String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  user              User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  statementImport   StatementImport        @relation(fields: [statementImportId], references: [id], onDelete: Restrict)
+  supersedes        StatementPayment?       @relation("StatementPaymentCorrection", fields: [supersedesId], references: [id], onDelete: Restrict)
+  corrections       StatementPayment[]      @relation("StatementPaymentCorrection")
+
+  @@unique([userId, idempotencyKey], map: "statement_payments_user_idempotency_key")
+  @@index([statementImportId, voidedAt, paidAt], map: "statement_payments_active_statement_idx")
+  @@index([userId, createdAt], map: "statement_payments_user_created_idx")
+  @@index([supersedesId], map: "statement_payments_supersedes_idx")
+  @@map("statement_payments")
 }
 
 model StatementRow {
@@ -307,6 +353,10 @@ model StatementRow {
   amount             Decimal              @db.Decimal(12, 2)
   currency           String               @default("MXN")
   kind               StatementRowKind
+  parsedTransactionDate DateTime?
+  parsedAmount       Decimal              @db.Decimal(12, 2)
+  parsedCurrency     String
+  parsedKind         StatementRowKind
   decision           StatementRowDecision @default(PENDING)
   categoryId         String?
   linkedCreditCardId String?
@@ -339,6 +389,7 @@ model StatementReconciliation {
   creditsTotal      Decimal                       @db.Decimal(12, 2)
   closingBalance    Decimal                       @db.Decimal(12, 2)
   difference        Decimal                       @db.Decimal(12, 2)
+  currency          String                        @default("MXN")
   status            StatementReconciliationStatus @default(PENDING)
   message           String?
   createdAt         DateTime                      @default(now())

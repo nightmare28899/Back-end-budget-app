@@ -9,10 +9,12 @@ import { PdfTextExtractor } from "./extractors/pdf-text.extractor";
 import { BanamexStatementParser } from "./parsers/banamex/banamex-statement.parser";
 import { BbvaStatementParser } from "./parsers/bbva/bbva-statement.parser";
 import { RappiCardStatementParser } from "./parsers/rappicard/rappicard-statement.parser";
+import { StatementPaymentsController } from "./statement-payments.controller";
+import { StatementPaymentsService } from "./statement-payments.service";
 
 @Module({
   imports: [PrismaModule, StorageModule],
-  controllers: [CardStatementsController],
+  controllers: [CardStatementsController, StatementPaymentsController],
   providers: [
     CardStatementsService,
     EntitlementsService,
@@ -21,7 +23,8 @@ import { RappiCardStatementParser } from "./parsers/rappicard/rappicard-statemen
     BanamexStatementParser,
     RappiCardStatementParser,
     BbvaStatementParser,
+    StatementPaymentsService,
   ],
-  exports: [CardStatementsService],
+  exports: [CardStatementsService, StatementPaymentsService],
 })
 export class CardStatementsModule {}

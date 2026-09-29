@@ -66,6 +66,7 @@ export interface ParsedStatementData {
   periodEnd: Date;
   warningCount: number;
   reconciliation: {
+    currency: string;
     openingBalance: number;
     chargesTotal: number;
     paymentsTotal: number;

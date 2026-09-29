@@ -110,6 +110,7 @@ describe("BbvaStatementParser", () => {
     const result = parser.parse(extractedFixture);
 
     expect(result.reconciliation).toMatchObject({
+      currency: "MXN",
       openingBalance: 12199.06,
       chargesTotal: 13310.66,
       paymentsTotal: 12199.06,

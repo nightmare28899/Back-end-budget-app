@@ -39,6 +39,7 @@ describe("BanamexStatementParser", () => {
     expect(result.periodStart.toISOString()).toBe("2026-08-01T12:00:00.000Z");
     expect(result.periodEnd.toISOString()).toBe("2026-08-31T12:00:00.000Z");
     expect(result.reconciliation).toMatchObject({
+      currency: "MXN",
       status: StatementReconciliationStatus.PASSED,
       difference: 0,
       openingBalance: 5000,
@@ -91,6 +92,7 @@ describe("BanamexStatementParser", () => {
       result.rows.filter((row) => row.section === StatementSection.CURRENT_CHARGES),
     ).toHaveLength(2);
     expect(result.reconciliation).toMatchObject({
+      currency: "MXN",
       status: StatementReconciliationStatus.PASSED,
       openingBalance: 5000,
       chargesTotal: 4000,

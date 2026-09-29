@@ -250,6 +250,15 @@ export class UsersService {
       await transaction.expense.deleteMany({ where: { userId } });
       await transaction.income.deleteMany({ where: { userId } });
       await transaction.subscription.deleteMany({ where: { userId } });
+      // The payment ledger uses RESTRICT FKs to users, statement_imports and
+      // itself (supersedesId), so it must go first. Statement imports cascade
+      // to their rows; expenses (which reference rows) are already deleted.
+      await transaction.statementPayment.updateMany({
+        where: { userId, supersedesId: { not: null } },
+        data: { supersedesId: null },
+      });
+      await transaction.statementPayment.deleteMany({ where: { userId } });
+      await transaction.statementImport.deleteMany({ where: { userId } });
       await transaction.creditCard.deleteMany({ where: { userId } });
       await transaction.category.deleteMany({ where: { userId } });
       await transaction.savingsTransaction.deleteMany({

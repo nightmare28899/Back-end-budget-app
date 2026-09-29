@@ -56,10 +56,10 @@ export class UpdateStatementRowDto {
   @MaxLength(120)
   merchantName?: string | null;
 
-  @ApiPropertyOptional({ minimum: 0.01 })
+  @ApiPropertyOptional({ minimum: 0.01, multipleOf: 0.01 })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   amount?: number;
 

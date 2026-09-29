@@ -15,6 +15,10 @@ import {
 import { CardStatementsService } from "./card-statements.service";
 import type { ParsedStatementData } from "./card-statements.types";
 import { StatementProcessingError } from "./parsers/statement-parser.interface";
+import {
+  calculateStatementPaymentSummary,
+  type StatementSummaryInput,
+} from "./statement-payment-summary";
 
 describe("CardStatementsService", () => {
   type StatementRowCreateManyArg = {
@@ -29,14 +33,17 @@ describe("CardStatementsService", () => {
     findFirst: jest.fn(),
     updateMany: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
   };
   const expense = {
     count: jest.fn(),
   };
+  const statementPayment = { count: jest.fn() };
   const tx = {
     statementImport: {
       updateMany: jest.fn(),
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       update: jest.fn(),
     },
     statementRow: {
@@ -74,6 +81,7 @@ describe("CardStatementsService", () => {
   const prisma = {
     statementImport,
     expense,
+    statementPayment,
     creditCard: { findFirst: jest.fn() },
     $transaction: jest.fn(async (input: unknown) => {
       if (typeof input === "function") {
@@ -92,6 +100,17 @@ describe("CardStatementsService", () => {
   const entitlements = {
     assertPremium: jest.fn<Promise<void>, [string, string]>(),
   };
+  const statementPaymentsService = {
+    summarize: jest.fn((context: Partial<StatementSummaryInput>) =>
+      calculateStatementPaymentSummary({
+        reconciliation: context.reconciliation ?? null,
+        paymentTargets: context.paymentTargets ?? [],
+        payments: context.payments ?? [],
+      }),
+    ),
+    createCompatibilityPayment: jest.fn(),
+    clearCompatibilityStatus: jest.fn(),
+  };
 
   let service: CardStatementsService;
 
@@ -109,6 +128,7 @@ describe("CardStatementsService", () => {
       storage as never,
       processor as never,
       entitlements as never,
+      statementPaymentsService as never,
     );
   });
 
@@ -138,7 +158,8 @@ describe("CardStatementsService", () => {
         }),
       () => service.confirm("user-1", "import-1", { version: 1 }),
       () => service.revert("user-1", "import-1", { version: 1 }),
-      () => service.setPaidStatus("user-1", "import-1", true),
+      () => service.resume("user-1", "import-1", { version: 1 }),
+      () => service.setPaidStatus("user-1", "import-1", { isPaid: true }),
       () => service.remove("user-1", "import-1"),
     ];
 
@@ -170,7 +191,12 @@ describe("CardStatementsService", () => {
     });
     expect(statementImport.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ creditCardId: "card-1" }),
+        where: expect.objectContaining({ creditCardId: "card-1" }) as unknown,
+        select: expect.objectContaining({
+          reconciliation: {
+            select: { closingBalance: true, currency: true, status: true },
+          },
+        }) as unknown,
       }),
     );
   });
@@ -182,6 +208,40 @@ describe("CardStatementsService", () => {
       service.findAll("user-1", { creditCardId: "someone-elses-card" }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(statementImport.findMany).not.toHaveBeenCalled();
+  });
+
+  it("exposes deterministic adjustment metadata without raw statement text", async () => {
+    statementImport.findFirst.mockResolvedValue({
+      ...baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+      sourceObjectKey: "object-key",
+      reconciliation: null,
+      paymentTargets: [],
+      instruments: [],
+      financingPlans: [],
+      rows: [
+        {
+          id: "row-1",
+          transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          amount: 101,
+          parsedAmount: 100,
+          currency: "MXN",
+          parsedCurrency: "MXN",
+          kind: StatementRowKind.CHARGE,
+          parsedKind: StatementRowKind.CHARGE,
+          rawText: "sensitive source text",
+        },
+      ],
+    });
+
+    const result = await service.findOne("user-1", "import-1");
+
+    expect(result.adjustmentCount).toBe(1);
+    expect(result.rows[0]).toMatchObject({
+      isAdjusted: true,
+      parsedAmount: 100,
+    });
+    expect(result.rows[0]).not.toHaveProperty("rawText");
   });
 
   it("rejects a file whose bytes do not contain a PDF signature", async () => {
@@ -312,7 +372,9 @@ describe("CardStatementsService", () => {
       status: StatementImportStatus.UPLOADED,
       version: 1,
     });
-    processor.process.mockRejectedValue(new Error("unexpected pdf-parse crash"));
+    processor.process.mockRejectedValue(
+      new Error("unexpected pdf-parse crash"),
+    );
     statementImport.updateMany.mockResolvedValue({ count: 1 });
     statementImport.findFirst.mockResolvedValue({
       ...baseImport(StatementImportStatus.FAILED, 2, "object-key"),
@@ -325,7 +387,9 @@ describe("CardStatementsService", () => {
       financingPlans: [],
       rows: [],
     });
-    const errorSpy = jest.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
+    const errorSpy = jest
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => undefined);
 
     await expect(
       service.createImport(
@@ -376,6 +440,99 @@ describe("CardStatementsService", () => {
       "page-2:row-1",
       "page-2:row-2",
     ]);
+    expect(createCall?.data[0]).toMatchObject({
+      parsedTransactionDate: parsed.rows[0].transactionDate,
+      parsedAmount: parsed.rows[0].amount,
+      parsedCurrency: parsed.rows[0].currency,
+      parsedKind: parsed.rows[0].kind,
+    });
+    const reconciliationCalls = tx.statementReconciliation.create.mock
+      .calls as Array<[{ data: { currency: string } }]>;
+    const reconciliationCall = reconciliationCalls[0][0];
+    expect(reconciliationCall.data.currency).toBe("MXN");
+  });
+
+  it("rejects another import for the same owned card cycle before replacing children", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.UPLOADED, 1),
+    );
+    tx.statementImport.findFirst.mockResolvedValue({ id: "existing-import" });
+
+    await expectCycleConflict(
+      service.stageParsedStatement(
+        "user-1",
+        "import-1",
+        parsedStatement([parsedRow("row-1", 0)]),
+      ),
+    );
+    expect(tx.statementRow.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "statement_imports_user_card_period_key",
+    ["periodEnd", "creditCardId", "userId", "periodStart"],
+  ])(
+    "translates a concurrent cycle unique violation for target %p",
+    async (target) => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.UPLOADED, 1),
+      );
+      prisma.$transaction.mockRejectedValueOnce(
+        Object.assign(new Error("Unique constraint"), {
+          code: "P2002",
+          meta: { target },
+        }),
+      );
+
+      await expectCycleConflict(
+        service.stageParsedStatement(
+          "user-1",
+          "import-1",
+          parsedStatement([parsedRow("row-1", 0)]),
+        ),
+      );
+      expect(statementImport.delete).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rethrows an unrelated concurrent unique violation", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.UPLOADED, 1),
+    );
+    const uniqueError = Object.assign(new Error("Unique constraint"), {
+      code: "P2002",
+      meta: { target: ["statementImportId", "occurrenceKey"] },
+    });
+    prisma.$transaction.mockRejectedValueOnce(uniqueError);
+
+    await expect(
+      service.stageParsedStatement(
+        "user-1",
+        "import-1",
+        parsedStatement([parsedRow("row-1", 0)]),
+      ),
+    ).rejects.toBe(uniqueError);
+  });
+
+  it("rethrows a malformed cycle target with a duplicate and missing field", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.UPLOADED, 1),
+    );
+    const uniqueError = Object.assign(new Error("Unique constraint"), {
+      code: "P2002",
+      meta: {
+        target: ["userId", "creditCardId", "periodStart", "periodStart"],
+      },
+    });
+    prisma.$transaction.mockRejectedValueOnce(uniqueError);
+
+    await expect(
+      service.stageParsedStatement(
+        "user-1",
+        "import-1",
+        parsedStatement([parsedRow("row-1", 0)]),
+      ),
+    ).rejects.toBe(uniqueError);
   });
 
   it("rejects duplicate occurrence keys before persisting parsed rows", async () => {
@@ -391,6 +548,118 @@ describe("CardStatementsService", () => {
       service.stageParsedStatement("user-1", "import-1", parsed),
     ).rejects.toThrow("occurrence keys must be non-empty and unique");
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["amount", { amount: 101 }],
+    ["date", { transactionDate: "2026-08-11T12:00:00.000Z" }],
+    ["currency", { currency: "USD" }],
+    ["kind", { kind: StatementRowKind.INTEREST }],
+  ])(
+    "detects a %s adjustment and accepts it with a trimmed reason",
+    async (_field, patch) => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+      );
+      const currentRow = {
+        id: "row-1",
+        transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        amount: 100,
+        parsedAmount: 100,
+        currency: "MXN",
+        parsedCurrency: "MXN",
+        kind: StatementRowKind.CHARGE,
+        parsedKind: StatementRowKind.CHARGE,
+        decisionNote: null,
+      };
+      tx.statementRow.findMany
+        .mockResolvedValueOnce([currentRow])
+        .mockResolvedValueOnce([]);
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      jest
+        .spyOn(service, "findOne")
+        .mockResolvedValue({ id: "import-1" } as never);
+
+      await expect(
+        service.updateRows("user-1", "import-1", {
+          version: 2,
+          rows: [
+            {
+              id: "row-1",
+              ...patch,
+              decisionNote: "  Verified correction  ",
+            },
+          ],
+        }),
+      ).resolves.toBeDefined();
+      const updateCalls = tx.statementRow.update.mock.calls as Array<
+        [{ data: { decisionNote: string } }]
+      >;
+      const updateCall = updateCalls[0][0];
+      expect(updateCall.data.decisionNote).toBe("Verified correction");
+    },
+  );
+
+  it("rejects clearing the reason while an accounting adjustment remains", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+    );
+    tx.statementRow.findMany.mockResolvedValueOnce([
+      {
+        id: "row-1",
+        transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        amount: 101,
+        parsedAmount: 100,
+        currency: "MXN",
+        parsedCurrency: "MXN",
+        kind: StatementRowKind.CHARGE,
+        parsedKind: StatementRowKind.CHARGE,
+        decisionNote: "Verified correction",
+      },
+    ]);
+
+    await expect(
+      service.updateRows("user-1", "import-1", {
+        version: 2,
+        rows: [{ id: "row-1", decisionNote: null }],
+      }),
+    ).rejects.toThrow("Every accounting adjustment requires a decision note");
+    expect(tx.statementRow.update).not.toHaveBeenCalled();
+  });
+
+  it("compares row amounts at persisted cent precision", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+    );
+    tx.statementRow.findMany
+      .mockResolvedValueOnce([
+        {
+          id: "row-1",
+          transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          amount: 100,
+          parsedAmount: 100,
+          currency: "MXN",
+          parsedCurrency: "MXN",
+          kind: StatementRowKind.CHARGE,
+          parsedKind: StatementRowKind.CHARGE,
+          decisionNote: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+    jest
+      .spyOn(service, "findOne")
+      .mockResolvedValue({ id: "import-1" } as never);
+
+    await expect(
+      service.updateRows("user-1", "import-1", {
+        version: 2,
+        rows: [{ id: "row-1", amount: 100.001 }],
+      }),
+    ).resolves.toBeDefined();
   });
 
   it("confirms reviewed expense rows in one database transaction", async () => {
@@ -420,6 +689,11 @@ describe("CardStatementsService", () => {
           merchantName: "Local purchase",
           amount: 120,
           currency: "MXN",
+          parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          parsedAmount: 120,
+          parsedCurrency: "MXN",
+          parsedKind: StatementRowKind.CHARGE,
+          decisionNote: null,
           categoryId: "category-1",
           linkedCreditCardId: "card-1",
           decision: StatementRowDecision.INCLUDE_EXPENSE,
@@ -486,14 +760,51 @@ describe("CardStatementsService", () => {
     expect(tx.expense.createMany).not.toHaveBeenCalled();
   });
 
+  it("rechecks accounting adjustments inside confirmation and requires a reason", async () => {
+    statementImport.findFirst.mockResolvedValue(
+      baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+    );
+    tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+    tx.statementImport.findUnique.mockResolvedValue({
+      ...baseImport(StatementImportStatus.NEEDS_REVIEW, 3),
+      reconciliation: { status: StatementReconciliationStatus.PASSED },
+      rows: [
+        {
+          id: "row-adjusted",
+          section: StatementSection.CURRENT_CHARGES,
+          kind: StatementRowKind.CHARGE,
+          parsedKind: StatementRowKind.CHARGE,
+          transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+          description: "Adjusted purchase",
+          merchantName: null,
+          amount: 125,
+          parsedAmount: 120,
+          currency: "MXN",
+          parsedCurrency: "MXN",
+          categoryId: "category-1",
+          linkedCreditCardId: "card-1",
+          decision: StatementRowDecision.INCLUDE_EXPENSE,
+          decisionNote: "   ",
+        },
+      ],
+    });
+
+    await expect(
+      service.confirm("user-1", "import-1", { version: 2 }),
+    ).rejects.toThrow("Every accounting adjustment requires a decision note");
+    expect(tx.expense.createMany).not.toHaveBeenCalled();
+  });
+
   describe("setPaidStatus", () => {
-    it("marks an import paid and stamps paidAt", async () => {
+    it("marks an import paid, stamps paidAt, and stores the paid amount", async () => {
       statementImport.findFirst
         .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
         .mockResolvedValueOnce({
           ...baseImport(StatementImportStatus.CONFIRMED, 3),
           isPaid: true,
           paidAt: new Date("2026-08-15T00:00:00.000Z"),
+          paidAmount: 4199.31,
           reconciliation: null,
           paymentTargets: [],
           instruments: [],
@@ -502,26 +813,30 @@ describe("CardStatementsService", () => {
         });
       statementImport.update.mockResolvedValue({});
 
-      const result = await service.setPaidStatus("user-1", "import-1", true);
-
-      expect(statementImport.update).toHaveBeenCalledWith({
-        where: { id: "import-1" },
-        data: {
-          isPaid: true,
-          paidAt: expect.any(Date),
-        },
+      const result = await service.setPaidStatus("user-1", "import-1", {
+        isPaid: true,
+        amount: 4199.31,
       });
-      expect(result).toMatchObject({ isPaid: true });
+
+      expect(
+        statementPaymentsService.createCompatibilityPayment,
+      ).toHaveBeenCalledWith(
+        "user-1",
+        "import-1",
+        expect.objectContaining({ amount: 4199.31 }),
+      );
+      expect(result).toMatchObject({ isPaid: true, paidAmount: 4199.31 });
       expect(result.paidAt).not.toBeNull();
     });
 
-    it("marks an import unpaid and clears paidAt", async () => {
+    it("marks an import unpaid, clears paidAt, and clears the paid amount", async () => {
       statementImport.findFirst
         .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
         .mockResolvedValueOnce({
           ...baseImport(StatementImportStatus.CONFIRMED, 3),
           isPaid: false,
           paidAt: null,
+          paidAmount: null,
           reconciliation: null,
           paymentTargets: [],
           instruments: [],
@@ -530,25 +845,142 @@ describe("CardStatementsService", () => {
         });
       statementImport.update.mockResolvedValue({});
 
-      const result = await service.setPaidStatus("user-1", "import-1", false);
-
-      expect(statementImport.update).toHaveBeenCalledWith({
-        where: { id: "import-1" },
-        data: {
-          isPaid: false,
-          paidAt: null,
-        },
+      const result = await service.setPaidStatus("user-1", "import-1", {
+        isPaid: false,
       });
-      expect(result).toMatchObject({ isPaid: false, paidAt: null });
+
+      expect(
+        statementPaymentsService.clearCompatibilityStatus,
+      ).toHaveBeenCalledWith("user-1", "import-1");
+      expect(result).toMatchObject({
+        isPaid: false,
+        paidAt: null,
+        paidAmount: null,
+      });
     });
 
     it("throws NotFoundException for a nonexistent or unowned import", async () => {
       statementImport.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.setPaidStatus("user-1", "someone-elses-import", true),
+        service.setPaidStatus("user-1", "someone-elses-import", {
+          isPaid: true,
+          amount: 100,
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(statementImport.update).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reverts imported expenses without erasing payment history", async () => {
+    const paymentHistory = [
+      {
+        id: "payment-1",
+        amount: 125,
+        currency: "MXN",
+        paidAt: new Date("2026-09-29T12:00:00.000Z"),
+        voidedAt: null,
+      },
+    ];
+    statementImport.findFirst
+      .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
+      .mockResolvedValueOnce({
+        ...baseImport(StatementImportStatus.REVERTED, 4),
+        reconciliation: null,
+        paymentTargets: [],
+        payments: paymentHistory,
+        instruments: [],
+        financingPlans: [],
+        rows: [],
+      });
+    tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+    tx.statementRow.findMany.mockResolvedValue([{ id: "row-1" }]);
+    tx.expense.deleteMany.mockResolvedValue({ count: 1 });
+    tx.statementImport.update.mockResolvedValue({});
+
+    const result = await service.revert("user-1", "import-1", { version: 3 });
+
+    expect(result.import.paymentHistory).toEqual(paymentHistory);
+    expect(result.deletedExpenseCount).toBe(1);
+    expect(prisma.statementPayment).not.toHaveProperty("deleteMany");
+  });
+
+  describe("resume", () => {
+    it("moves a reverted import back to NEEDS_REVIEW so it becomes editable again", async () => {
+      statementImport.findFirst
+        .mockResolvedValueOnce(baseImport(StatementImportStatus.REVERTED, 3))
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.NEEDS_REVIEW, 4),
+          reconciliation: null,
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      statementImport.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.resume("user-1", "import-1", {
+        version: 3,
+      });
+
+      expect(statementImport.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: "import-1",
+          userId: "user-1",
+          version: 3,
+          status: StatementImportStatus.REVERTED,
+        },
+        data: {
+          status: StatementImportStatus.NEEDS_REVIEW,
+          revertedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      expect(result).toMatchObject({
+        status: StatementImportStatus.NEEDS_REVIEW,
+      });
+    });
+
+    it("rejects resuming an import that isn't reverted", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.CONFIRMED, 1),
+      );
+
+      await expect(
+        service.resume("user-1", "import-1", { version: 1 }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(statementImport.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("rejects a stale version before touching the database", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.REVERTED, 3),
+      );
+
+      await expect(
+        service.resume("user-1", "import-1", { version: 2 }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(statementImport.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("throws ConflictException on a concurrent update race", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.REVERTED, 3),
+      );
+      statementImport.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.resume("user-1", "import-1", { version: 3 }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it("throws NotFoundException for a nonexistent or unowned import", async () => {
+      statementImport.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.resume("user-1", "someone-elses-import", { version: 1 }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(statementImport.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -559,7 +991,7 @@ describe("CardStatementsService", () => {
       );
       storage.deleteFile.mockResolvedValue(undefined);
       statementImport.updateMany.mockResolvedValue({ count: 1 });
-      statementImport.delete = jest.fn().mockResolvedValue({});
+      statementImport.delete.mockResolvedValue({});
 
       const result = await service.remove("user-1", "import-1");
 
@@ -567,12 +999,11 @@ describe("CardStatementsService", () => {
       expect(statementImport.delete).toHaveBeenCalledWith({
         where: { id: "import-1" },
       });
-      expect(result).toMatchObject({ message: expect.any(String) });
+      expect(result).toMatchObject({ message: expect.any(String) as unknown });
     });
 
     it("throws NotFoundException for a nonexistent or unowned import", async () => {
       statementImport.findFirst.mockResolvedValue(null);
-      statementImport.delete = jest.fn();
 
       await expect(
         service.remove("user-1", "someone-elses-import"),
@@ -584,11 +1015,23 @@ describe("CardStatementsService", () => {
       statementImport.findFirst.mockResolvedValue(
         baseImport(StatementImportStatus.CONFIRMED, 3, "object-key"),
       );
-      statementImport.delete = jest.fn();
 
-      await expect(
-        service.remove("user-1", "import-1"),
-      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.remove("user-1", "import-1")).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(storage.deleteFile).not.toHaveBeenCalled();
+      expect(statementImport.delete).not.toHaveBeenCalled();
+    });
+
+    it("blocks deletion when any payment history exists", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.REVERTED, 4, "object-key"),
+      );
+      statementPayment.count.mockResolvedValue(1);
+
+      await expect(service.remove("user-1", "import-1")).rejects.toThrow(
+        "Statements with payment history cannot be deleted",
+      );
       expect(storage.deleteFile).not.toHaveBeenCalled();
       expect(statementImport.delete).not.toHaveBeenCalled();
     });
@@ -625,6 +1068,19 @@ describe("CardStatementsService", () => {
     };
   }
 
+  async function expectCycleConflict(operation: Promise<unknown>) {
+    try {
+      await operation;
+      throw new Error("Expected a statement cycle conflict");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConflictException);
+      const response = (error as ConflictException).getResponse() as {
+        code: string;
+      };
+      expect(response.code).toBe("STATEMENT_CYCLE_CONFLICT");
+    }
+  }
+
   function baseImport(
     status: StatementImportStatus,
     version: number,
@@ -636,6 +1092,7 @@ describe("CardStatementsService", () => {
       creditCardId: "card-1",
       status,
       version,
+      paymentVersion: 0,
       sourceObjectKey,
     };
   }
@@ -662,6 +1119,7 @@ describe("CardStatementsService", () => {
       periodEnd: new Date("2026-08-31T23:59:59.999Z"),
       warningCount: 0,
       reconciliation: {
+        currency: "MXN",
         openingBalance: 0,
         chargesTotal: 200,
         paymentsTotal: 0,

@@ -94,7 +94,7 @@ export class RappiCardStatementParser implements StatementParser {
       periodStart: period.start,
       periodEnd: period.end,
       warningCount,
-      reconciliation,
+      reconciliation: { ...reconciliation, currency: "MXN" },
       instruments: [],
       financingPlans: rowsAndPlans.financingPlans,
       paymentTargets,
@@ -121,8 +121,13 @@ export class RappiCardStatementParser implements StatementParser {
   }
 
   private extractDueDate(lines: RappiCardSourceLine[]) {
+    // The real template appends a footnote digit directly to the label
+    // (no space, same as the payment-target labels) and prints the weekday
+    // name before the date ("FECHA LIMITE DE PAGO1 VIERNES, 04-SEP-2026")
+    // instead of the assumed/legacy "FECHA LIMITE DE PAGO: 01-SEP-2026" —
+    // skip both optionally so either layout matches.
     const pattern = new RegExp(
-      `FECHA LIMITE DE PAGO\\s*:?\\s*(${RAPPICARD_DATE_PATTERN})`,
+      `FECHA LIMITE DE PAGO\\d*\\s*:?\\s*(?:[A-Z]+,\\s*)?(${RAPPICARD_DATE_PATTERN})`,
     );
     for (const line of lines) {
       const match = line.fold.match(pattern);

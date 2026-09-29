@@ -4,7 +4,10 @@ import type { ExtractedStatementText } from "../statement-parser.interface";
 // transaction rows in the real Banorte-issued RappiCard template print plain
 // numeric YYYY-MM-DD dates instead ("2026-07-18") — accept both wherever a
 // date can appear so either layout parses correctly.
-const RAPPICARD_ALPHA_DATE_PATTERN = "\\d{2}-[A-Z]{3}-\\d{4}";
+// September prints as the 4-letter "sept" ("15-sept-2026") instead of the
+// 3-letter "sep" used by every other month abbreviation, so the alpha month
+// must allow 3 or 4 letters.
+const RAPPICARD_ALPHA_DATE_PATTERN = "\\d{2}-[A-Z]{3,4}-\\d{4}";
 const RAPPICARD_NUMERIC_DATE_PATTERN = "\\d{4}-\\d{2}-\\d{2}";
 export const RAPPICARD_DATE_PATTERN = `(?:${RAPPICARD_ALPHA_DATE_PATTERN}|${RAPPICARD_NUMERIC_DATE_PATTERN})`;
 // Real statement amounts print as "+$1,250.00"/"-$1,000.00" with no currency
@@ -33,6 +36,7 @@ const MONTHS: Record<string, number> = {
   JUL: 7,
   AGO: 8,
   SEP: 9,
+  SEPT: 9,
   SET: 9,
   OCT: 10,
   NOV: 11,
@@ -77,7 +81,7 @@ export function toRappiCardSourceLines(
 export function parseRappiCardDate(value: string) {
   const trimmed = value.trim();
 
-  const alpha = trimmed.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+  const alpha = trimmed.match(/^(\d{2})-([A-Za-z]{3,4})-(\d{4})$/);
   if (alpha) {
     const day = Number(alpha[1]);
     const month = MONTHS[alpha[2].toUpperCase()];

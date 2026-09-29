@@ -30,13 +30,18 @@ import { CreateStatementImportDto } from "./dto/create-statement-import.dto";
 import { MarkStatementPaidDto } from "./dto/mark-statement-paid.dto";
 import { QueryStatementImportsDto } from "./dto/query-statement-imports.dto";
 import { UpdateStatementRowsDto } from "./dto/update-statement-rows.dto";
+import { CreateStatementPaymentDto } from "./dto/create-statement-payment.dto";
+import { StatementPaymentsService } from "./statement-payments.service";
 
 @ApiTags("Statement imports")
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller("statement-imports")
 export class CardStatementsController {
-  constructor(private readonly cardStatementsService: CardStatementsService) {}
+  constructor(
+    private readonly cardStatementsService: CardStatementsService,
+    private readonly statementPaymentsService: StatementPaymentsService,
+  ) {}
 
   @Post()
   @ApiConsumes("multipart/form-data")
@@ -111,6 +116,16 @@ export class CardStatementsController {
     return this.cardStatementsService.revert(user.id, id, dto);
   }
 
+  @Post(":id/resume")
+  @ApiOperation({ summary: "Resume a reverted statement import for review" })
+  resume(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: ConfirmStatementImportDto,
+  ) {
+    return this.cardStatementsService.resume(user.id, id, dto);
+  }
+
   @Patch(":id/paid")
   @ApiOperation({ summary: "Mark a statement import as paid or not paid" })
   setPaidStatus(
@@ -118,7 +133,17 @@ export class CardStatementsController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: MarkStatementPaidDto,
   ) {
-    return this.cardStatementsService.setPaidStatus(user.id, id, dto.isPaid);
+    return this.cardStatementsService.setPaidStatus(user.id, id, dto);
+  }
+
+  @Post(":id/payments")
+  @ApiOperation({ summary: "Record an append-only statement payment" })
+  createPayment(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: CreateStatementPaymentDto,
+  ) {
+    return this.statementPaymentsService.create(user.id, id, dto);
   }
 
   @Delete(":id")
