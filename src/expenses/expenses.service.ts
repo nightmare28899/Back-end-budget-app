@@ -8,7 +8,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
-import { QueryExpenseDto } from "./dto/query-expense.dto";
+import { ExpensePaymentStatus, QueryExpenseDto } from "./dto/query-expense.dto";
 import { LocationSuggestionQueryDto } from "./dto/location-suggestion-query.dto";
 import { InstallmentFrequency, PaymentMethod, Prisma } from "@prisma/client";
 import {
@@ -24,11 +24,27 @@ import {
 } from "./installments/expense-installments.util";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
 
+const EXPENSE_INCLUDE = {
+  category: true,
+  creditCard: { select: creditCardPublicSelect },
+  statementRow: {
+    select: {
+      statementImportId: true,
+      statementImport: {
+        select: {
+          isPaid: true,
+          paymentStatus: true,
+          sourceFileName: true,
+          periodStart: true,
+          periodEnd: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.ExpenseInclude;
+
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
-  include: {
-    category: true;
-    creditCard: { select: typeof creditCardPublicSelect };
-  };
+  include: typeof EXPENSE_INCLUDE;
 }>;
 
 type ExpenseWithPresignedUrl = ExpenseWithCategory & {
@@ -117,10 +133,7 @@ export class ExpensesService {
         imageUrl,
         userId,
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
   }
 
@@ -136,10 +149,7 @@ export class ExpensesService {
         userId,
         date: { gte: startOfDay, lte: endOfDay },
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
       orderBy: { date: "desc" },
     });
 
@@ -211,11 +221,13 @@ export class ExpensesService {
       };
 
       if (query.from) {
-        dateFilter.gte = new Date(query.from);
+        const fromDate = new Date(query.from);
+        fromDate.setUTCHours(0, 0, 0, 0);
+        dateFilter.gte = fromDate;
       }
       if (query.to) {
         const toDate = new Date(query.to);
-        toDate.setHours(23, 59, 59, 999);
+        toDate.setUTCHours(23, 59, 59, 999);
         dateFilter.lte = minDate(toDate, now);
       }
 
@@ -242,14 +254,49 @@ export class ExpensesService {
       where.categoryId = query.categoryId;
     }
 
+    if (query.creditCardId) {
+      where.creditCardId = query.creditCardId;
+    }
+
+    if (query.paymentStatus === ExpensePaymentStatus.PAID) {
+      // Paid only ever means "reconciled into a statement marked paid" — a
+      // manual credit-card expense with no statement yet is never PAID, it
+      // just isn't UNPAID either until it's linked (see below).
+      where.statementRow = {
+        is: { statementImport: { is: { paymentStatus: "PAID" } } },
+      };
+    } else if (query.paymentStatus === ExpensePaymentStatus.PARTIAL) {
+      where.statementRow = {
+        is: { statementImport: { is: { paymentStatus: "PARTIAL" } } },
+      };
+    } else if (query.paymentStatus === ExpensePaymentStatus.UNPAID) {
+      // Mirrors the UI badge in ExpenseList: unpaid is either a statement row
+      // whose statement isn't paid yet, or a credit-card expense that hasn't
+      // been reconciled into any statement at all. Combined via `AND` (not
+      // reassigning `where.OR`) so it composes with the `q` search filter
+      // above instead of clobbering it.
+      const unpaidCondition: Prisma.ExpenseWhereInput = {
+        OR: [
+          {
+            statementRow: {
+              is: { statementImport: { is: { paymentStatus: "UNPAID" } } },
+            },
+          },
+          { statementRow: null, paymentMethod: PaymentMethod.CREDIT_CARD },
+        ],
+      };
+      where.AND = Array.isArray(where.AND)
+        ? [...where.AND, unpaidCondition]
+        : where.AND
+          ? [where.AND, unpaidCondition]
+          : [unpaidCondition];
+    }
+
     const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all(
       [
         this.prisma.expense.findMany({
           where,
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
           orderBy: { date: "desc" },
           skip,
           take: limit,
@@ -458,10 +505,7 @@ export class ExpensesService {
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {
     const expense = await this.prisma.expense.findFirst({
       where: { id, userId },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
 
     if (!expense) throw new NotFoundException("Expense not found");
@@ -572,10 +616,7 @@ export class ExpensesService {
         categoryId: nextCategoryId,
         date: dto.date ? new Date(dto.date) : undefined,
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
   }
 
@@ -794,10 +835,7 @@ export class ExpensesService {
             installmentPurchaseDate: input.installmentPlan.purchaseDate,
             installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
           },
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
         });
 
         createdExpenses.push(created);
@@ -870,10 +908,7 @@ export class ExpensesService {
             installmentPurchaseDate: input.installmentPlan.purchaseDate,
             installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
           },
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
         });
 
         createdExpenses.push(created);
@@ -947,10 +982,7 @@ export class ExpensesService {
           installmentPurchaseDate: null,
           installmentFirstPaymentDate: null,
         },
-        include: {
-          category: true,
-          creditCard: { select: creditCardPublicSelect },
-        },
+        include: EXPENSE_INCLUDE,
       });
     });
   }

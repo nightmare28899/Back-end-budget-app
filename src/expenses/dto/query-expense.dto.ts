@@ -5,12 +5,20 @@ import {
   IsDateString,
   MaxLength,
   IsInt,
+  IsEnum,
+  IsUUID,
   Min,
   Max,
 } from "class-validator";
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { trimStringValue } from "../../common/dto/string-transformers";
 import { IsCategoryId } from "../../common/dto/category-id.decorator";
+
+export enum ExpensePaymentStatus {
+  PAID = "PAID",
+  PARTIAL = "PARTIAL",
+  UNPAID = "UNPAID",
+}
 
 export class QueryExpenseDto {
   @ApiPropertyOptional({ example: "2026-02-01" })
@@ -34,6 +42,16 @@ export class QueryExpenseDto {
   @IsOptional()
   @IsCategoryId()
   categoryId?: string;
+
+  @ApiPropertyOptional({ enum: ExpensePaymentStatus })
+  @IsOptional()
+  @IsEnum(ExpensePaymentStatus)
+  paymentStatus?: ExpensePaymentStatus;
+
+  @ApiPropertyOptional({ description: "Credit card ID filter" })
+  @IsOptional()
+  @IsUUID()
+  creditCardId?: string;
 
   @ApiPropertyOptional({ example: 1, default: 1, minimum: 1 })
   @IsOptional()
