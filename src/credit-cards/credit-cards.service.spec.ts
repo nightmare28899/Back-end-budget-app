@@ -319,6 +319,88 @@ describe("CreditCardsService", () => {
     expect(result.cards[0].nextPayment?.amount).toBe(375);
   });
 
+  it("adds deferred installment balances to the debt of a fully paid statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 500,
+        periodEnd: "2026-03-31",
+        plans: [
+          { remainingAmount: 489.91 },
+          { remainingAmount: 2865.55 },
+          { remainingAmount: null },
+        ],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.deferredInstallmentBalance).toBe(3355.46);
+    expect(card.creditStatus.owedBalance).toBe(3355.46);
+    expect(card.statementSummary.projectedTotalDebt).toBe(3355.46);
+    expect(card.statementSummary.remainingStatement).toBe(0);
+    expect(card.creditStatus.availableCredit).toBe(1000 - 3355.46);
+    expect(result.portfolio.byCurrency[0]).toMatchObject({
+      totalOwedBalance: 3355.46,
+      totalDeferredInstallmentBalance: 3355.46,
+    });
+  });
+
+  it("adds deferred installment balances on top of an unpaid statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 100,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 300,
+        plans: [{ remainingAmount: 200 }],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.currentPaymentDue).toBe(200);
+    expect(card.statementSummary.remainingStatement).toBe(400);
+    expect(card.statementSummary.deferredInstallmentBalance).toBe(200);
+    expect(card.creditStatus.owedBalance).toBe(600);
+    expect(card.statementSummary.projectedTotalDebt).toBe(600);
+  });
+
+  it("ignores deferred plans in another currency and reports zero without plans", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+        plans: [
+          { remainingAmount: 900, currency: "USD" },
+          { remainingAmount: 100 },
+        ],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    expect(result.cards[0].statementSummary.deferredInstallmentBalance).toBe(
+      100,
+    );
+    expect(result.cards[0].creditStatus.owedBalance).toBe(600);
+
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    const without = await service.getOverview("user-1", {});
+    expect(without.cards[0].statementSummary.deferredInstallmentBalance).toBe(
+      0,
+    );
+  });
+
   it("returns the configured currency from create writes", async () => {
     const create = jest
       .fn()
@@ -442,6 +524,7 @@ describe("CreditCardsService", () => {
     periodEnd: string;
     paymentTargetCurrency?: string;
     paymentTargetAmount?: number;
+    plans?: Array<{ remainingAmount: number | null; currency?: string }>;
   }) {
     return {
       id: `statement-${options.periodEnd}`,
@@ -465,6 +548,10 @@ describe("CreditCardsService", () => {
             },
           ]
         : [],
+      financingPlans: (options.plans ?? []).map((plan) => ({
+        remainingAmount: plan.remainingAmount,
+        currency: plan.currency ?? "MXN",
+      })),
       payments:
         options.paidAmount && options.paidAmount > 0
           ? [

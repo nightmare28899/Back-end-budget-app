@@ -63,6 +63,7 @@ type ConfirmedStatementRow = {
   periodEnd: Date | null;
   createdAt: Date;
   paymentSummary: StatementPaymentSummary;
+  financingPlans: Array<{ remainingAmount: number | null; currency: string }>;
   paymentTargets: Array<{
     kind: StatementPaymentTargetKind;
     amount: number;
@@ -256,6 +257,9 @@ export class CreditCardsService {
           payments: {
             select: { amount: true, currency: true, voidedAt: true },
           },
+          financingPlans: {
+            select: { remainingAmount: true, currency: true },
+          },
         },
         orderBy: [
           { periodEnd: { sort: "desc", nulls: "last" } },
@@ -309,6 +313,11 @@ export class CreditCardsService {
         periodEnd: statement.periodEnd,
         createdAt: statement.createdAt,
         paymentSummary: calculateStatementPaymentSummary(statement),
+        financingPlans: (statement.financingPlans ?? []).map((plan) => ({
+          remainingAmount:
+            plan.remainingAmount == null ? null : Number(plan.remainingAmount),
+          currency: plan.currency,
+        })),
         paymentTargets: statement.paymentTargets.map((target) => ({
           kind: target.kind,
           amount: Number(target.amount),
@@ -360,6 +369,13 @@ export class CreditCardsService {
         latestStatement?.paymentSummary.remainingStatement ?? 0,
         latestStatement?.paymentSummary.currentPaymentDue ?? 0,
       );
+      // The remaining balance of installment plans is owed but is not part of
+      // this statement's payment: the issuer only bills the current instalment.
+      const deferredInstallmentBalance = this.roundMoney(
+        (latestStatement?.financingPlans ?? [])
+          .filter((plan) => plan.currency === card.currency)
+          .reduce((sum, plan) => sum + (plan.remainingAmount ?? 0), 0),
+      );
       const statementPeriodEnd = latestStatement?.periodEnd
         ? this.utcDayEnd(latestStatement.periodEnd)
         : null;
@@ -394,6 +410,7 @@ export class CreditCardsService {
           : this.roundMoney(Number(card.creditLimit));
       const outstandingBalance = this.roundMoney(
         statementBalance +
+          deferredInstallmentBalance +
           matchingUnbilledExpenses.reduce(
             (sum, expense) => sum + expense.cost,
             0,
@@ -495,6 +512,7 @@ export class CreditCardsService {
           paymentStatus:
             latestStatement?.paymentSummary.paymentStatus ?? "UNPAID",
           remainingStatement: this.roundMoney(statementBalance),
+          deferredInstallmentBalance,
           noInterestTarget:
             latestStatement?.paymentSummary.noInterestTarget ?? null,
           currentPaymentDue:
@@ -812,6 +830,7 @@ export class CreditCardsService {
         closingBalance: number | null;
         paidTotal: number;
         remainingStatement: number;
+        deferredInstallmentBalance: number;
         currentPaymentDue: number | null;
         postCloseSpend: number;
         postCloseExpenseCount: number;
@@ -880,6 +899,13 @@ export class CreditCardsService {
         totalStatementRemainder: this.roundMoney(
           currencyCards.reduce(
             (sum, card) => sum + card.statementSummary.remainingStatement,
+            0,
+          ),
+        ),
+        totalDeferredInstallmentBalance: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) =>
+              sum + card.statementSummary.deferredInstallmentBalance,
             0,
           ),
         ),
