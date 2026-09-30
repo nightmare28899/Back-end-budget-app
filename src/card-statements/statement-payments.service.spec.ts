@@ -374,6 +374,17 @@ describe("StatementPaymentsService", () => {
     expect(tx.statementPayment.create).not.toHaveBeenCalled();
   });
 
+  it("rejects a new payment once the statement is fully paid", async () => {
+    tx.statementPayment.findUnique.mockResolvedValue(null);
+    tx.statementImport.findFirst.mockResolvedValue(context({ paidTotal: 500 }));
+
+    await expect(
+      service.create("user-1", "import-1", paymentDto()),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.statementImport.updateMany).not.toHaveBeenCalled();
+    expect(tx.statementPayment.create).not.toHaveBeenCalled();
+  });
+
   it("rejects a payment when the statement has no reconciliation", async () => {
     tx.statementPayment.findUnique.mockResolvedValue(null);
     tx.statementImport.findFirst.mockResolvedValue(

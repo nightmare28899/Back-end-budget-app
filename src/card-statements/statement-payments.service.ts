@@ -8,6 +8,7 @@ import {
   Prisma,
   StatementImportStatus,
   StatementPaymentSource,
+  StatementPaymentStatus,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
@@ -313,6 +314,14 @@ export class StatementPaymentsService {
 
     const context = await this.findOwnedContext(tx, userId, statementImportId);
     this.assertPaymentIntegrity(context, dto.currency);
+    // A fully paid statement only accepts corrections or voids, so a
+    // double-submitted payment cannot silently overpay it.
+    if (
+      calculateStatementPaymentSummary(context).paymentStatus ===
+      StatementPaymentStatus.PAID
+    ) {
+      throw new ConflictException("Statement is already fully paid");
+    }
     await this.claimVersion(tx, context, dto.expectedVersion);
     await tx.statementPayment.create({
       data: {
