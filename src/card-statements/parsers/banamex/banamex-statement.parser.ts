@@ -36,6 +36,23 @@ import {
 
 const PARSER_VERSION = "banamex-text-v1";
 
+// Multi-line installment-plan entries: a "<date> <description fragment>" line,
+// optional description continuation lines, then an amounts line such as
+// "$4,000.00 $2,800.00 $80.00 $10.00 $400.00 4 de 12 30.00%".
+const PLAN_START_PATTERN = new RegExp(`^(${DATE_PATTERN})\\s+(\\S.*)$`, "i");
+const PLAN_MONEY_TOKEN = "\\$\\s?[\\d,]+\\.\\d{2}";
+const PLAN_AMOUNTS_PATTERN = new RegExp(
+  `^((?:${PLAN_MONEY_TOKEN}\\s+){2,}${PLAN_MONEY_TOKEN})\\s+(\\d{1,3})\\s+DE\\s+(\\d{1,3})(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?$`,
+  "i",
+);
+const PLAN_MAX_DESCRIPTION_LINES = 4;
+
+interface PendingPlanEntry {
+  date: Date;
+  descriptionParts: string[];
+  sourceRowNumber: number;
+}
+
 interface SummaryValues {
   openingBalance: number | null;
   chargesTotal: number | null;
@@ -167,14 +184,10 @@ export class BanamexStatementParser implements StatementParser {
     ]);
 
     const creditsTotal =
-      this.findLabeledAmount(lines, [/^CREDITOS\b/, /^BONIFICACIONES\b/]) ??
-      0;
+      this.findLabeledAmount(lines, [/^CREDITOS\b/, /^BONIFICACIONES\b/]) ?? 0;
 
     const closingBalance =
-      this.findLabeledAmount(lines, [
-        /^SALDO NUEVO\b/,
-        /^SALDO AL CORTE\b/,
-      ]) ??
+      this.findLabeledAmount(lines, [/^SALDO NUEVO\b/, /^SALDO AL CORTE\b/]) ??
       (openingBalance !== null &&
       chargesTotal !== null &&
       paymentsTotal !== null
@@ -284,10 +297,12 @@ export class BanamexStatementParser implements StatementParser {
     let financingType: StatementFinancingType =
       StatementFinancingType.NO_INTEREST;
     let currentInstrumentPosition: number | null = null;
+    let pendingPlan: PendingPlanEntry | null = null;
 
     for (const line of lines) {
       const nextSection = this.detectSection(line);
       if (nextSection) {
+        pendingPlan = null;
         section = nextSection.section;
         financingType = nextSection.financingType ?? financingType;
         continue;
@@ -295,6 +310,7 @@ export class BanamexStatementParser implements StatementParser {
 
       const instrument = this.parseInstrument(line);
       if (instrument) {
+        pendingPlan = null;
         const key = `${instrument.kind}:${instrument.last4 ?? instrument.label}`;
         const existingPosition = instrumentPositions.get(key);
         if (existingPosition !== undefined) {
@@ -318,8 +334,22 @@ export class BanamexStatementParser implements StatementParser {
 
       const transaction = this.parseTransaction(line);
       if (!transaction) {
+        if (section === StatementSection.FINANCING_PLAN) {
+          const step = this.stepMultiLinePlan(
+            line,
+            pendingPlan,
+            financingType,
+            currentInstrumentPosition,
+            financingPlans.length,
+          );
+          pendingPlan = step.pending;
+          if (step.plan) {
+            financingPlans.push(step.plan);
+          }
+        }
         continue;
       }
+      pendingPlan = null;
 
       const kind = this.classifyRow(transaction.description, section);
       const financingPlan =
@@ -481,6 +511,89 @@ export class BanamexStatementParser implements StatementParser {
       installmentCount,
       currency: "MXN",
       sourceRowNumber,
+    };
+  }
+
+  private stepMultiLinePlan(
+    line: BanamexSourceLine,
+    pending: PendingPlanEntry | null,
+    type: StatementFinancingType,
+    instrumentPosition: number | null,
+    position: number,
+  ): {
+    pending: PendingPlanEntry | null;
+    plan: ParsedStatementFinancingPlan | null;
+  } {
+    const start = line.text.match(PLAN_START_PATTERN);
+    if (start) {
+      const date = parseStatementDate(start[1]);
+      const hasMoney = BANAMEX_MONEY_AT_END_PATTERN.test(line.text);
+      if (date && !hasMoney) {
+        return {
+          pending: {
+            date,
+            descriptionParts: [start[2]],
+            sourceRowNumber: line.line,
+          },
+          plan: null,
+        };
+      }
+      return { pending: null, plan: null };
+    }
+    if (!pending) {
+      return { pending: null, plan: null };
+    }
+
+    const amounts = line.text.match(PLAN_AMOUNTS_PATTERN);
+    if (amounts) {
+      const values = Array.from(
+        amounts[1].matchAll(new RegExp(PLAN_MONEY_TOKEN, "g")),
+        (match) => parseStatementMoney(match[0]),
+      );
+      const originalAmount = values[0];
+      const remainingAmount = values[1];
+      const installmentAmount = values[values.length - 1];
+      if (
+        originalAmount === null ||
+        remainingAmount === null ||
+        installmentAmount === null
+      ) {
+        return { pending: null, plan: null };
+      }
+      return {
+        pending: null,
+        plan: {
+          position,
+          instrumentPosition,
+          type,
+          merchantName: normalizeStatementMerchant(
+            pending.descriptionParts.join(" "),
+          ),
+          purchaseDate: pending.date,
+          originalAmount: Math.abs(originalAmount),
+          remainingAmount: Math.abs(remainingAmount),
+          installmentAmount: Math.abs(installmentAmount),
+          installmentNumber: Number(amounts[2]),
+          installmentCount: Number(amounts[3]),
+          currency: "MXN",
+          sourceRowNumber: pending.sourceRowNumber,
+        },
+      };
+    }
+
+    // Any other line with money is not part of a description: abandon the entry.
+    if (
+      BANAMEX_MONEY_AT_END_PATTERN.test(line.text) ||
+      pending.descriptionParts.length >= PLAN_MAX_DESCRIPTION_LINES
+    ) {
+      return { pending: null, plan: null };
+    }
+    return {
+      pending: {
+        ...pending,
+        descriptionParts: [...pending.descriptionParts, line.text],
+      },
+      plan: null,
     };
   }
 

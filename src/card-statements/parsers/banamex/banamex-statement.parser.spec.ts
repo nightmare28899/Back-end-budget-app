@@ -152,7 +152,60 @@ describe("BanamexStatementParser", () => {
       expect(result.rows.map((row) => row.amount)).toEqual([
         1000, 500, 10, 90, 400,
       ]);
-      expect(result.financingPlans).toHaveLength(0);
+    });
+
+    it("parses multi-line installment plans with balances and required payment", () => {
+      const result = parseDeferred();
+
+      expect(result.financingPlans).toHaveLength(2);
+      expect(result.financingPlans[0]).toMatchObject({
+        position: 0,
+        type: StatementFinancingType.INTEREST_BEARING,
+        merchantName: "DIFERIMIENTO DE SALDO APP MOBILE",
+        originalAmount: 4000,
+        remainingAmount: 2800,
+        installmentAmount: 400,
+        installmentNumber: 4,
+        installmentCount: 12,
+        currency: "MXN",
+      });
+      expect(result.financingPlans[0].purchaseDate?.toISOString()).toBe(
+        "2026-09-21T12:00:00.000Z",
+      );
+      expect(result.financingPlans[1]).toMatchObject({
+        position: 1,
+        merchantName: "COMPRA PLAN PERSONAL TIENDA DE PRUEBA PLAZA CENTRAL",
+        originalAmount: 1200,
+        remainingAmount: 800,
+        installmentAmount: 150,
+        installmentNumber: 5,
+        installmentCount: 12,
+      });
+    });
+
+    it("parses no-interest plan tables without interest columns", () => {
+      const text = [
+        "BANAMEX",
+        "Periodo: 22-ago-2026 al 21-sep-2026",
+        "COMPRAS A MESES SIN INTERESES",
+        "10-sep-2026 TIENDA DE PRUEBA",
+        "PLAN MESES",
+        "$3,000.00 $2,000.00 $500.00 2 de 6",
+        "CARGOS, ABONOS Y COMPRAS REGULARES (NO A MESES)",
+        "24-ago-2026 25-ago-2026 SUPERMERCADO DE PRUEBA + $500.00",
+      ].join("\n");
+      const result = parser.parse({ text, pages: [{ number: 1, text }] });
+
+      expect(result.financingPlans).toHaveLength(1);
+      expect(result.financingPlans[0]).toMatchObject({
+        type: StatementFinancingType.NO_INTEREST,
+        originalAmount: 3000,
+        remainingAmount: 2000,
+        installmentAmount: 500,
+        installmentNumber: 2,
+        installmentCount: 6,
+      });
+      expect(result.rows).toHaveLength(1);
     });
 
     it("keeps deferred-balance installments out of expense candidates", () => {
