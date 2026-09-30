@@ -1,0 +1,51 @@
+SYNTHETIC ANONYMIZED TEST FIXTURE
+Estado de Cuenta Mensual
+Tarjeta de Credito
+BANAMEX
+Periodo: 22-ago-2026 al 21-sep-2026
+Fecha límite de pago:1 lunes, 12-oct-2026
+Pago para no generar intereses:2 $2,000.00
+Pago mínimo + compras y cargos diferidos a meses: 3 $900.00
+Pago mínimo:4 $500.00
+
+RESUMEN DE CARGOS Y ABONOS DEL PERIODO
+Adeudo del periodo anterior = $1,500.00
+Cargos regulares (no a meses) + $1,500.00
+Cargos compras a meses (capital)7 + $400.00
+Monto de Intereses8 + $90.00
+IVA de Intereses y comisiones + $10.00
+Pagos y abonos - $1,500.00
+
+DESGLOSE DE MOVIMIENTOS14
+COMPRAS Y CARGOS DIFERIDOS A MESES CON INTERESES
+Tarjeta titular: 0000 0000 TITULAR DE PRUEBA
+Fecha
+de la
+operación
+Descripción Monto
+Original
+Saldo
+pendiente
+Pago
+requerido13
+21-sep-2026 DIFERIMIENTO DE
+SALDO APP MOBILE
+$4,000.00 $2,800.00 $80.00 $10.00 $400.00 4 de 12 30.00%
+CARGOS, ABONOS Y COMPRAS REGULARES (NO A MESES)
+Tarjeta titular: 0000 0000 TITULAR DE PRUEBA
+Fecha de la
+operación
+Fecha
+de cargo Descripción del movimiento Monto
+22-ago-2026 24-ago-2026 PAGO INTERBANCARIO
+REFERENCIA: 0000000 - $1,500.00
+24-ago-2026 25-ago-2026 GASOLINERA DE PRUEBA MX + $1,000.00
+29-ago-2026 31-ago-2026 SUPERMERCADO DE PRUEBA + $500.00
+21-sep-2026 21-sep-2026 IVA POR INTERESES Y/O COMISIONES + $10.00
+21-sep-2026 21-sep-2026 INTERES GRAVABLE PLAN PERSONAL + $90.00
+21-sep-2026 21-sep-2026 DIFERIMIENTO DE SALDO APP MOBI004 de 012 + $400.00
+Total cargos + $2,000.00
+
+NOTAS ACLARATORIAS
+13. EL PAGO REQUERIDO DE COMPRAS O CARGOS A MESES CON INTERESES YA INCLUYE LOS INTERESES
+14. LA LEYENDA DE DISPOSICION DE EFECTIVO EN EL DESGLOSE DE MOVIMIENTOS

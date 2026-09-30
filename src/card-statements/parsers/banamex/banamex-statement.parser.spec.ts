@@ -108,6 +108,67 @@ describe("BanamexStatementParser", () => {
     });
   });
 
+  describe("deferred-balance layout with footnoted headers", () => {
+    const deferredFixture = readFileSync(
+      join(
+        __dirname,
+        "__fixtures__",
+        "banamex-statement-deferred-balance.sanitized.txt",
+      ),
+      "utf8",
+    );
+    const parseDeferred = () =>
+      parser.parse({
+        text: deferredFixture,
+        pages: [{ number: 1, text: deferredFixture }],
+      });
+
+    it("reads the due date after a footnote digit and a weekday", () => {
+      const result = parseDeferred();
+
+      expect(result.paymentTargets[0]?.dueDate?.toISOString()).toBe(
+        "2026-10-12T12:00:00.000Z",
+      );
+    });
+
+    it("classifies the minimum-plus-deferred target separately from the minimum", () => {
+      const result = parseDeferred();
+
+      expect(
+        result.paymentTargets.map((target) => [target.kind, target.amount]),
+      ).toEqual([
+        [StatementPaymentTargetKind.NO_INTEREST, 2000],
+        [StatementPaymentTargetKind.MINIMUM_PLUS_INSTALLMENTS, 900],
+        [StatementPaymentTargetKind.MINIMUM, 500],
+      ]);
+    });
+
+    it("returns to regular charges after the 'no a meses' header", () => {
+      const result = parseDeferred();
+
+      expect(result.rows.map((row) => row.section)).toEqual(
+        result.rows.map(() => StatementSection.CURRENT_CHARGES),
+      );
+      expect(result.rows.map((row) => row.amount)).toEqual([
+        1000, 500, 10, 90, 400,
+      ]);
+      expect(result.financingPlans).toHaveLength(0);
+    });
+
+    it("keeps deferred-balance installments out of expense candidates", () => {
+      const result = parseDeferred();
+      const deferred = result.rows.find((row) =>
+        row.description.startsWith("DIFERIMIENTO DE SALDO"),
+      );
+
+      expect(deferred).toMatchObject({
+        kind: StatementRowKind.REFINANCED_PRINCIPAL,
+        decision: StatementRowDecision.INFO_ONLY,
+        warningCodes: ["DEBT_AMORTIZATION_NOT_EXPENSE"],
+      });
+    });
+  });
+
   it("preserves repeated installments as separate source occurrences", () => {
     const result = parser.parse({
       text: fixture,

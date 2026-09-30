@@ -121,9 +121,10 @@ export class BanamexStatementParser implements StatementParser {
 
   private extractDueDate(lines: BanamexSourceLine[]) {
     // The Costco co-branded layout prefixes the date with a weekday name,
-    // e.g. "FECHA LIMITE DE PAGO: JUEVES, 10-SEP-2026".
+    // e.g. "FECHA LIMITE DE PAGO: JUEVES, 10-SEP-2026"; newer layouts also add
+    // a footnote digit after the colon ("FECHA LIMITE DE PAGO:1 LUNES, ...").
     const pattern = new RegExp(
-      `FECHA LIMITE DE PAGO\\s*:?\\s*(?:[A-Z]+,\\s*)?(${DATE_PATTERN})`,
+      `FECHA LIMITE DE PAGO\\s*:?\\s*\\d*\\s*(?:[A-Z]+,\\s*)?(${DATE_PATTERN})`,
     );
     for (const line of lines) {
       const match = line.fold.match(pattern);
@@ -232,7 +233,9 @@ export class BanamexStatementParser implements StatementParser {
       {
         kind: StatementPaymentTargetKind.MINIMUM_PLUS_INSTALLMENTS,
         label: "Minimum payment plus installments",
-        pattern: /^PAGO MINIMO MAS .*MESES.*INTERESES/,
+        // "PAGO MINIMO MAS COMPRAS A MESES SIN INTERESES" or
+        // "PAGO MINIMO + COMPRAS Y CARGOS DIFERIDOS A MESES".
+        pattern: /^PAGO MINIMO\s*(?:MAS|\+)\s.*\bMESES\b/,
       },
       {
         kind: StatementPaymentTargetKind.NO_INTEREST,
@@ -366,8 +369,18 @@ export class BanamexStatementParser implements StatementParser {
     if (BANAMEX_MONEY_AT_END_PATTERN.test(line.text)) {
       return null;
     }
+    // Numbered footnotes ("13. EL PAGO REQUERIDO DE COMPRAS ... A MESES")
+    // mention section names but never start a section.
+    if (/^\d+\.\s/.test(line.fold)) {
+      return null;
+    }
     if (/\b(?:CFDI|COMPROBANTES FISCALES)\b/.test(line.fold)) {
       return { section: StatementSection.CFDI };
+    }
+    // "CARGOS, ABONOS Y COMPRAS REGULARES (NO A MESES)" follows the
+    // installments table and must end it.
+    if (/COMPRAS REGULARES|\(NO A MESES\)/.test(line.fold)) {
+      return { section: StatementSection.CURRENT_CHARGES };
     }
     if (/COMPRAS.*MESES.*SIN INTERESES/.test(line.fold)) {
       return {
@@ -488,7 +501,7 @@ export class BanamexStatementParser implements StatementParser {
     if (/BONIFICACION|DEVOLUCION|\bCREDITO\b/.test(folded)) {
       return StatementRowKind.CREDIT;
     }
-    if (/CAPITAL|SALDO DIFERIDO|REFINANCI/.test(folded)) {
+    if (/CAPITAL|SALDO DIFERIDO|DIFERIMIENTO DE SALDO|REFINANCI/.test(folded)) {
       return StatementRowKind.REFINANCED_PRINCIPAL;
     }
     return StatementRowKind.CHARGE;
