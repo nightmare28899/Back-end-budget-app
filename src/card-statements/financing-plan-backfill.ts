@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import type { ParsedStatementData } from "./card-statements.types";
+import type {
+  ExtractedStatementText,
+  StatementParser,
+} from "./parsers/statement-parser.interface";
 
-export class BanamexBackfillError extends Error {
+export class FinancingPlanBackfillError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "BanamexBackfillError";
+    this.name = "FinancingPlanBackfillError";
   }
 }
 
@@ -23,6 +27,41 @@ export interface BuildBackfillInput {
   instrumentSnapshots: Array<{ id: string; position: number }>;
 }
 
+/**
+ * Picks the parser for the PDF. With an explicit issuer the matching parser
+ * must accept the PDF; without one exactly one parser may accept it, so an
+ * ambiguous or unrecognized PDF never gets parsed by a guess.
+ */
+export function selectBackfillParser(
+  issuer: string | undefined,
+  parsers: Record<string, StatementParser>,
+  extracted: ExtractedStatementText,
+): StatementParser {
+  const issuers = Object.keys(parsers);
+  if (issuer !== undefined) {
+    const parser = parsers[issuer];
+    if (!parser) {
+      throw new FinancingPlanBackfillError(
+        `Unknown issuer "${issuer}" (expected one of: ${issuers.join(", ")})`,
+      );
+    }
+    if (!parser.canParse(extracted)) {
+      throw new FinancingPlanBackfillError(
+        `The PDF is not a ${issuer} statement`,
+      );
+    }
+    return parser;
+  }
+
+  const accepted = issuers.filter((name) => parsers[name].canParse(extracted));
+  if (accepted.length !== 1) {
+    throw new FinancingPlanBackfillError(
+      `Could not detect the issuer (${accepted.length} parsers accept the PDF); pass --issuer ${issuers.join("|")}`,
+    );
+  }
+  return parsers[accepted[0]];
+}
+
 export function sha256Hex(buffer: Buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
@@ -31,18 +70,18 @@ const dayKey = (value: Date | null | undefined) =>
   value ? value.toISOString().slice(0, 10) : null;
 
 /**
- * Pure step of the Banamex financing-plan backfill: verifies the PDF really is
+ * Pure step of the financing-plan backfill (any issuer): verifies the PDF really is
  * the one the import was created from and returns the plan rows to insert.
  * Throws instead of returning data whenever the inputs do not line up, so the
  * caller never deletes the existing plans without a safe replacement.
  */
-export function buildBanamexFinancingPlanBackfill(
+export function buildFinancingPlanBackfill(
   input: BuildBackfillInput,
 ): Prisma.StatementFinancingPlanCreateManyInput[] {
   const { statementImport, parsed } = input;
 
   if (input.pdfSha256 !== statementImport.sourceSha256) {
-    throw new BanamexBackfillError(
+    throw new FinancingPlanBackfillError(
       "PDF hash does not match the statement import source hash",
     );
   }
@@ -50,12 +89,12 @@ export function buildBanamexFinancingPlanBackfill(
     dayKey(parsed.periodStart) !== dayKey(statementImport.periodStart) ||
     dayKey(parsed.periodEnd) !== dayKey(statementImport.periodEnd)
   ) {
-    throw new BanamexBackfillError(
+    throw new FinancingPlanBackfillError(
       "Parsed statement period does not match the statement import period",
     );
   }
   if (parsed.financingPlans.length === 0) {
-    throw new BanamexBackfillError(
+    throw new FinancingPlanBackfillError(
       "The parser found no financing plans; refusing to replace existing plans",
     );
   }

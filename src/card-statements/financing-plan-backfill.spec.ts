@@ -1,13 +1,18 @@
 import { StatementFinancingType } from "@prisma/client";
 import {
-  BanamexBackfillError,
-  buildBanamexFinancingPlanBackfill,
+  FinancingPlanBackfillError,
+  buildFinancingPlanBackfill,
+  selectBackfillParser,
   sha256Hex,
   summarizeBackfillPlans,
-} from "./banamex-financing-plan-backfill";
+} from "./financing-plan-backfill";
 import type { ParsedStatementData } from "./card-statements.types";
+import type {
+  ExtractedStatementText,
+  StatementParser,
+} from "./parsers/statement-parser.interface";
 
-describe("buildBanamexFinancingPlanBackfill", () => {
+describe("buildFinancingPlanBackfill", () => {
   const pdf = Buffer.from("synthetic-pdf-bytes");
   const statementImport = {
     id: "import-1",
@@ -20,7 +25,7 @@ describe("buildBanamexFinancingPlanBackfill", () => {
     overrides: Partial<ParsedStatementData> = {},
   ): ParsedStatementData {
     return {
-      parserVersion: "banamex-text-v1",
+      parserVersion: "synthetic-text-v1",
       periodStart: new Date("2026-08-22T12:00:00.000Z"),
       periodEnd: new Date("2026-09-21T12:00:00.000Z"),
       warningCount: 0,
@@ -63,7 +68,7 @@ describe("buildBanamexFinancingPlanBackfill", () => {
   ];
 
   it("builds createMany data bound to the import and instrument snapshots", () => {
-    const data = buildBanamexFinancingPlanBackfill({
+    const data = buildFinancingPlanBackfill({
       statementImport,
       pdfSha256: sha256Hex(pdf),
       parsed: parsed(),
@@ -87,18 +92,18 @@ describe("buildBanamexFinancingPlanBackfill", () => {
 
   it("rejects a PDF whose hash differs from the import", () => {
     expect(() =>
-      buildBanamexFinancingPlanBackfill({
+      buildFinancingPlanBackfill({
         statementImport,
         pdfSha256: sha256Hex(Buffer.from("other")),
         parsed: parsed(),
         instrumentSnapshots: snapshots,
       }),
-    ).toThrow(BanamexBackfillError);
+    ).toThrow(FinancingPlanBackfillError);
   });
 
   it("rejects a parsed period that differs from the import period", () => {
     expect(() =>
-      buildBanamexFinancingPlanBackfill({
+      buildFinancingPlanBackfill({
         statementImport,
         pdfSha256: sha256Hex(pdf),
         parsed: parsed({ periodEnd: new Date("2026-10-21T12:00:00.000Z") }),
@@ -109,7 +114,7 @@ describe("buildBanamexFinancingPlanBackfill", () => {
 
   it("rejects a parse that yields no plans instead of wiping the old ones", () => {
     expect(() =>
-      buildBanamexFinancingPlanBackfill({
+      buildFinancingPlanBackfill({
         statementImport,
         pdfSha256: sha256Hex(pdf),
         parsed: parsed({ financingPlans: [] }),
@@ -119,7 +124,7 @@ describe("buildBanamexFinancingPlanBackfill", () => {
   });
 
   it("summarizes counts and amounts only", () => {
-    const data = buildBanamexFinancingPlanBackfill({
+    const data = buildFinancingPlanBackfill({
       statementImport,
       pdfSha256: sha256Hex(pdf),
       parsed: parsed(),
@@ -145,5 +150,69 @@ describe("buildBanamexFinancingPlanBackfill", () => {
         },
       ],
     });
+  });
+});
+
+describe("selectBackfillParser", () => {
+  const extracted: ExtractedStatementText = { text: "synthetic", pages: [] };
+  const parserThat = (accepts: boolean): StatementParser => ({
+    canParse: () => accepts,
+    parse: () => {
+      throw new Error("not used");
+    },
+  });
+
+  it("uses the parser of the requested issuer when it accepts the PDF", () => {
+    const banamex = parserThat(true);
+    const rappicard = parserThat(true);
+
+    expect(
+      selectBackfillParser("rappicard", { banamex, rappicard }, extracted),
+    ).toBe(rappicard);
+  });
+
+  it("rejects a PDF the requested issuer's parser does not accept", () => {
+    expect(() =>
+      selectBackfillParser(
+        "rappicard",
+        { banamex: parserThat(true), rappicard: parserThat(false) },
+        extracted,
+      ),
+    ).toThrow(/not a rappicard statement/i);
+  });
+
+  it("auto-detects the issuer when exactly one parser accepts the PDF", () => {
+    const rappicard = parserThat(true);
+
+    expect(
+      selectBackfillParser(
+        undefined,
+        { banamex: parserThat(false), rappicard },
+        extracted,
+      ),
+    ).toBe(rappicard);
+  });
+
+  it.each([
+    ["none", false, false],
+    ["several", true, true],
+  ])("refuses to auto-detect when %s parsers accept the PDF", (_, a, b) => {
+    expect(() =>
+      selectBackfillParser(
+        undefined,
+        { banamex: parserThat(a), rappicard: parserThat(b) },
+        extracted,
+      ),
+    ).toThrow(/--issuer/);
+  });
+
+  it("rejects an unknown issuer", () => {
+    expect(() =>
+      selectBackfillParser(
+        "unknown",
+        { banamex: parserThat(true), rappicard: parserThat(true) },
+        extracted,
+      ),
+    ).toThrow(/unknown issuer/i);
   });
 });

@@ -1,9 +1,14 @@
 /**
- * One-off backfill: replace the financing plans of a Banamex statement import
- * with the plans parsed from its original PDF (multi-line installment tables).
+ * One-off backfill: replace the financing plans of a statement import with the
+ * plans parsed from its original PDF (multi-line installment tables).
+ * Supported issuers: banamex, rappicard.
  *
  * Usage (from the backend root):
+ *   npm run backfill:financing-plans -- --statement-import-id <id> --pdf <path> [--issuer banamex|rappicard] [--dry-run]
  *   npm run backfill:banamex-plans -- --statement-import-id <id> --pdf <path> [--dry-run]
+ *
+ * Without --issuer the issuer is auto-detected; it aborts unless exactly one
+ * parser accepts the PDF.
  *
  * Database URL: read from DATABASE_URL (.env). If it points at
  * host.docker.internal the host is rewritten to localhost; set
@@ -21,25 +26,33 @@ import { PrismaClient } from "@prisma/client";
 import { Pool } from "pg";
 import { PdfTextExtractor } from "../src/card-statements/extractors/pdf-text.extractor";
 import { BanamexStatementParser } from "../src/card-statements/parsers/banamex/banamex-statement.parser";
+import { RappiCardStatementParser } from "../src/card-statements/parsers/rappicard/rappicard-statement.parser";
 import {
-  BanamexBackfillError,
-  buildBanamexFinancingPlanBackfill,
+  buildFinancingPlanBackfill,
+  FinancingPlanBackfillError,
+  selectBackfillParser,
   sha256Hex,
   summarizeBackfillPlans,
-} from "../src/card-statements/banamex-financing-plan-backfill";
+} from "../src/card-statements/financing-plan-backfill";
 
 function parseArgs(argv: string[]) {
-  const args = { importId: "", pdf: "", dryRun: false };
+  const args = {
+    importId: "",
+    pdf: "",
+    issuer: undefined as string | undefined,
+    dryRun: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--statement-import-id") args.importId = argv[++i] ?? "";
     else if (arg === "--pdf") args.pdf = argv[++i] ?? "";
+    else if (arg === "--issuer") args.issuer = argv[++i] ?? "";
     else if (arg === "--dry-run") args.dryRun = true;
-    else throw new BanamexBackfillError(`Unknown argument: ${arg}`);
+    else throw new FinancingPlanBackfillError(`Unknown argument: ${arg}`);
   }
   if (!args.importId || !args.pdf) {
-    throw new BanamexBackfillError(
-      "Usage: --statement-import-id <id> --pdf <path> [--dry-run]",
+    throw new FinancingPlanBackfillError(
+      "Usage: --statement-import-id <id> --pdf <path> [--issuer banamex|rappicard] [--dry-run]",
     );
   }
   return args;
@@ -48,7 +61,7 @@ function parseArgs(argv: string[]) {
 function resolveDatabaseUrl() {
   const url = process.env.BACKFILL_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!url) {
-    throw new BanamexBackfillError(
+    throw new FinancingPlanBackfillError(
       "DATABASE_URL (or BACKFILL_DATABASE_URL) is not defined",
     );
   }
@@ -74,17 +87,21 @@ async function main() {
       },
     });
     if (!statementImport) {
-      throw new BanamexBackfillError("Statement import not found");
+      throw new FinancingPlanBackfillError("Statement import not found");
     }
 
     const buffer = readFileSync(args.pdf);
     const extracted = await new PdfTextExtractor().extract(buffer);
-    const parser = new BanamexStatementParser();
-    if (!parser.canParse(extracted)) {
-      throw new BanamexBackfillError("The PDF is not a Banamex statement");
-    }
+    const parser = selectBackfillParser(
+      args.issuer,
+      {
+        banamex: new BanamexStatementParser(),
+        rappicard: new RappiCardStatementParser(),
+      },
+      extracted,
+    );
 
-    const plans = buildBanamexFinancingPlanBackfill({
+    const plans = buildFinancingPlanBackfill({
       statementImport,
       pdfSha256: sha256Hex(buffer),
       parsed: parser.parse(extracted),
