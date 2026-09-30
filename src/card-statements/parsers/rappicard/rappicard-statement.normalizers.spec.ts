@@ -1,4 +1,5 @@
 import {
+  normalizeRappiCardPlanMerchant,
   parseRappiCardDate,
   parseRappiCardMoney,
 } from "./rappicard-statement.normalizers";
@@ -54,6 +55,19 @@ describe("RappiCard statement normalizers", () => {
       "$10.00 USD",
     ])("rejects invalid amount %s", (value) => {
       expect(parseRappiCardMoney(value)).toBeNull();
+    });
+  });
+
+  describe("normalizeRappiCardPlanMerchant", () => {
+    it.each([
+      ["TIENDA UNO; RFC: AAA000000AA0", "TIENDA UNO"],
+      ["TIENDA UNO; RFC:", "TIENDA UNO"],
+      ["TIENDA UNO;", "TIENDA UNO"],
+      ["Servicio Demo de Prueba", "Servicio Demo de Prueba"],
+      ["TIENDA TRES A MESES", "TIENDA TRES A MESES"],
+      ["  TIENDA   DOS ;  RFC:  AAA000000AA0 ", "TIENDA DOS"],
+    ])("strips the RFC suffix from %s", (value, expected) => {
+      expect(normalizeRappiCardPlanMerchant(value)).toBe(expected);
     });
   });
 });

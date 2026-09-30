@@ -142,6 +142,16 @@ export function normalizeRappiCardMerchant(value: string) {
     .slice(0, 120);
 }
 
+// Installment-plan descriptions end with the merchant's RFC ("NAME; RFC:
+// XXX000000XX0"), which may be split over several lines or missing entirely.
+export function normalizeRappiCardPlanMerchant(value: string) {
+  return normalizeRappiCardMerchant(
+    value
+      .replace(/\s*;?\s*RFC\s*:?(?:\s*[A-Z0-9&Ñ]{12,13})?\s*$/i, "")
+      .replace(/\s*;\s*$/, ""),
+  );
+}
+
 export function roundRappiCardMoney(value: number) {
   return Math.round(value * 100) / 100;
 }

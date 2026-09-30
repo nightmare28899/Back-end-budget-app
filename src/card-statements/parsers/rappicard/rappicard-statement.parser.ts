@@ -26,12 +26,42 @@ import {
   parseRappiCardMoney,
   RAPPICARD_DATE_PATTERN,
   RAPPICARD_TRANSACTION_PATTERN,
+  normalizeRappiCardPlanMerchant,
   type RappiCardSourceLine,
   roundRappiCardMoney,
   toRappiCardSourceLines,
 } from "./rappicard-statement.normalizers";
 
 const PARSER_VERSION = "rappicard-text-v1";
+
+// Installment-plan table entries. A date may be split over two lines
+// ("2026-08-" then "06 MERCHANT"), the description may continue over several
+// lines and the amounts may share a line with the description tail:
+//   "<orig> <remaining> [<interest> <VAT>] <required> <N> de <M> <rate>%".
+const PLAN_DATE_PREFIX_PATTERN = /^(\d{4}-\d{2}-)$/;
+const PLAN_DATE_SUFFIX_PATTERN = /^(\d{2})(?:\s+(.*))?$/;
+const PLAN_DATE_START_PATTERN = new RegExp(
+  `^(${RAPPICARD_DATE_PATTERN})(?:\\s+(.*))?$`,
+  "i",
+);
+const PLAN_MONEY_TOKEN = "\\$\\s?[\\d,]+\\.\\d{2}";
+const PLAN_AMOUNTS_PATTERN = new RegExp(
+  `(?:^|\\s)((?:${PLAN_MONEY_TOKEN}\\s+){2,}${PLAN_MONEY_TOKEN})\\s+(\\d{1,3})\\s+DE\\s+(\\d{1,3})\\s+\\d+(?:\\.\\d+)?\\s*%$`,
+  "i",
+);
+const PLAN_MAX_LINES = 6;
+const PLAN_END_PATTERN =
+  /^(?:NOTAS ACLARATORIAS|GLOSARIO DE TERMINOS|TOTAL DE (?:CARGOS|ABONOS))\b/;
+const INSTRUMENT_HEADER_PATTERN = /^TARJETA\b.*\b\d{4}$/;
+
+interface PendingPlanEntry {
+  page: number;
+  date: Date | null;
+  datePrefix: string | null;
+  parts: string[];
+  lineCount: number;
+  sourceRowNumber: number;
+}
 
 interface SummaryValues {
   openingBalance: number | null;
@@ -81,12 +111,17 @@ export class RappiCardStatementParser implements StatementParser {
     const dueDate = this.extractDueDate(lines);
     const reconciliation = this.buildReconciliation(this.extractSummary(lines));
     const paymentTargets = this.extractPaymentTargets(lines, dueDate);
+    const plansBalanceMismatch = this.hasPlansBalanceMismatch(
+      lines,
+      rowsAndPlans.financingPlans,
+    );
     const warningCount =
       rowsAndPlans.rows.reduce(
         (total, row) => total + (row.warningCodes?.length ?? 0),
         0,
       ) +
       (paymentTargets.length === 0 ? 1 : 0) +
+      (plansBalanceMismatch ? 1 : 0) +
       (reconciliation.status === StatementReconciliationStatus.PASSED ? 0 : 1);
 
     return {
@@ -145,15 +180,38 @@ export class RappiCardStatementParser implements StatementParser {
     const rows: ParsedStatementRow[] = [];
     const financingPlans: ParsedStatementFinancingPlan[] = [];
     let section: StatementSection = StatementSection.OTHER;
-    let financingType: StatementFinancingType = StatementFinancingType.NO_INTEREST;
+    let financingType: StatementFinancingType =
+      StatementFinancingType.NO_INTEREST;
+    let pendingPlan: PendingPlanEntry | null = null;
 
     for (const line of lines) {
-      if (/COMPRAS.*MESES.*CON INTERESES/.test(line.fold)) {
+      // Glossary/notes quote the section names mid-sentence ("COMPRAS Y
+      // CARGOS DIFERIDOS A MESES SIN ..."); they never start a section.
+      const quotedReference = /^["\u201c\u201d']/.test(line.text);
+      if (!quotedReference && PLAN_END_PATTERN.test(line.fold)) {
+        pendingPlan = null;
+        section = StatementSection.OTHER;
+        continue;
+      }
+      // "CARGOS, ABONOS Y COMPRAS REGULARES (NO A MESES)" follows the
+      // installments tables and must end them (it also matches the
+      // installment header pattern below, so check it first).
+      if (
+        !quotedReference &&
+        /COMPRAS REGULARES|\(NO A MESES\)/.test(line.fold)
+      ) {
+        pendingPlan = null;
+        section = StatementSection.CURRENT_CHARGES;
+        continue;
+      }
+      if (!quotedReference && /COMPRAS.*MESES.*CON INTERESES/.test(line.fold)) {
+        pendingPlan = null;
         section = StatementSection.FINANCING_PLAN;
         financingType = StatementFinancingType.INTEREST_BEARING;
         continue;
       }
-      if (/COMPRAS.*MESES/.test(line.fold)) {
+      if (!quotedReference && /COMPRAS.*MESES/.test(line.fold)) {
+        pendingPlan = null;
         section = StatementSection.FINANCING_PLAN;
         financingType = StatementFinancingType.NO_INTEREST;
         continue;
@@ -162,18 +220,41 @@ export class RappiCardStatementParser implements StatementParser {
       // Banorte-issued RappiCard template instead prints "DESGLOSE DE
       // MOVIMIENTOS" for this same section — accept both.
       if (/DESGLOSE DE MOVIMIENTOS|MOVIMIENTOS DEL PERIODO/.test(line.fold)) {
+        pendingPlan = null;
         section = StatementSection.CURRENT_CHARGES;
+        continue;
+      }
+      // Each card instrument prints its own table header.
+      if (INSTRUMENT_HEADER_PATTERN.test(line.fold)) {
+        pendingPlan = null;
         continue;
       }
 
       const transaction = this.parseTransaction(line);
-      if (!transaction || section === StatementSection.OTHER) {
+      if (!transaction) {
+        if (section === StatementSection.FINANCING_PLAN) {
+          const step = this.stepPlanTable(
+            line,
+            pendingPlan,
+            financingType,
+            financingPlans.length,
+          );
+          pendingPlan = step.pending;
+          if (step.plan) {
+            financingPlans.push(step.plan);
+          }
+        }
+        continue;
+      }
+      pendingPlan = null;
+      if (section === StatementSection.OTHER) {
         continue;
       }
 
-      const installment = transaction.description.match(
-        /\b(\d{1,2})\s+DE\s+(\d{1,2})\b/i,
-      );
+      const installment =
+        section === StatementSection.FINANCING_PLAN
+          ? transaction.description.match(/\b(\d{1,2})\s+DE\s+(\d{1,2})\b/i)
+          : null;
       const rowSection = installment
         ? StatementSection.FINANCING_PLAN
         : section;
@@ -222,6 +303,158 @@ export class RappiCardStatementParser implements StatementParser {
 
     this.markRepeatedOccurrences(rows);
     return { rows, financingPlans };
+  }
+
+  private stepPlanTable(
+    line: RappiCardSourceLine,
+    pending: PendingPlanEntry | null,
+    type: StatementFinancingType,
+    position: number,
+  ): {
+    pending: PendingPlanEntry | null;
+    plan: ParsedStatementFinancingPlan | null;
+  } {
+    // Plan entries never span pages: drop leftovers so page headers and
+    // footers cannot be glued onto a description.
+    const current = pending && pending.page === line.page ? pending : null;
+
+    const prefix = line.text.match(PLAN_DATE_PREFIX_PATTERN);
+    if (prefix) {
+      return {
+        pending: this.newPlanEntry(line, null, prefix[1], null),
+        plan: null,
+      };
+    }
+    const start = line.text.match(PLAN_DATE_START_PATTERN);
+    if (start) {
+      const date = parseRappiCardDate(start[1]);
+      if (date) {
+        return this.completePlanEntry(
+          this.newPlanEntry(line, date, null, start[2] ?? null),
+          type,
+          position,
+        );
+      }
+    }
+    if (!current) {
+      return { pending: null, plan: null };
+    }
+    if (current.datePrefix) {
+      const suffix = line.text.match(PLAN_DATE_SUFFIX_PATTERN);
+      const date = suffix
+        ? parseRappiCardDate(`${current.datePrefix}${suffix[1]}`)
+        : null;
+      if (!suffix || !date) {
+        return { pending: null, plan: null };
+      }
+      return this.completePlanEntry(
+        {
+          ...current,
+          date,
+          datePrefix: null,
+          parts: suffix[2] ? [suffix[2]] : [],
+        },
+        type,
+        position,
+      );
+    }
+    if (current.lineCount >= PLAN_MAX_LINES) {
+      return { pending: null, plan: null };
+    }
+    return this.completePlanEntry(
+      {
+        ...current,
+        parts: [...current.parts, line.text],
+        lineCount: current.lineCount + 1,
+      },
+      type,
+      position,
+    );
+  }
+
+  private newPlanEntry(
+    line: RappiCardSourceLine,
+    date: Date | null,
+    datePrefix: string | null,
+    firstPart: string | null,
+  ): PendingPlanEntry {
+    return {
+      page: line.page,
+      date,
+      datePrefix,
+      parts: firstPart ? [firstPart] : [],
+      lineCount: 1,
+      sourceRowNumber: line.line,
+    };
+  }
+
+  private completePlanEntry(
+    entry: PendingPlanEntry,
+    type: StatementFinancingType,
+    position: number,
+  ): {
+    pending: PendingPlanEntry | null;
+    plan: ParsedStatementFinancingPlan | null;
+  } {
+    if (!entry.date) {
+      return { pending: entry, plan: null };
+    }
+    const joined = entry.parts.join(" ").replace(/\s+/g, " ").trim();
+    const amounts = joined.match(PLAN_AMOUNTS_PATTERN);
+    if (!amounts) {
+      return { pending: entry, plan: null };
+    }
+    const values = Array.from(
+      amounts[1].matchAll(new RegExp(PLAN_MONEY_TOKEN, "g")),
+      (match) => parseRappiCardMoney(match[0]),
+    );
+    const originalAmount = values[0];
+    const remainingAmount = values[1];
+    const installmentAmount = values[values.length - 1];
+    if (
+      originalAmount === null ||
+      remainingAmount === null ||
+      installmentAmount === null
+    ) {
+      return { pending: null, plan: null };
+    }
+    const description = joined.slice(0, amounts.index ?? joined.length);
+    return {
+      pending: null,
+      plan: {
+        position,
+        type,
+        merchantName: normalizeRappiCardPlanMerchant(description),
+        purchaseDate: entry.date,
+        originalAmount: Math.abs(originalAmount),
+        remainingAmount: Math.abs(remainingAmount),
+        installmentAmount: Math.abs(installmentAmount),
+        installmentNumber: Number(amounts[2]),
+        installmentCount: Number(amounts[3]),
+        currency: "MXN",
+        sourceRowNumber: entry.sourceRowNumber,
+      },
+    };
+  }
+
+  // Page 1 prints the total still owed on every installment plan ("Saldo
+  // cargos a meses"), excluding the installment due this period. When the
+  // parsed plans do not add up to it, some plan was missed or misread.
+  private hasPlansBalanceMismatch(
+    lines: RappiCardSourceLine[],
+    plans: ParsedStatementFinancingPlan[],
+  ) {
+    const statedTotal = this.findLabeledAmount(
+      lines,
+      /^SALDO CARGOS A MESES\b/,
+    );
+    if (statedTotal === null) {
+      return false;
+    }
+    const parsedTotal = roundRappiCardMoney(
+      plans.reduce((total, plan) => total + (plan.remainingAmount ?? 0), 0),
+    );
+    return Math.abs(parsedTotal - statedTotal) > 0.01;
   }
 
   private parseTransaction(line: RappiCardSourceLine) {
@@ -379,7 +612,11 @@ export class RappiCardStatementParser implements StatementParser {
         : 0);
     const difference = complete
       ? roundRappiCardMoney(
-          openingBalance + chargesTotal - paymentsTotal - creditsTotal - closingBalance,
+          openingBalance +
+            chargesTotal -
+            paymentsTotal -
+            creditsTotal -
+            closingBalance,
         )
       : 0;
     const passed = complete && Math.abs(difference) <= 0.01;
