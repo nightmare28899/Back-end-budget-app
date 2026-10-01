@@ -120,4 +120,131 @@ describe("BbvaStatementParser", () => {
     });
     expect(result.warningCount).toBe(0);
   });
+
+  describe("installment layout (synthetic)", () => {
+    const installmentFixture = readFileSync(
+      join(
+        __dirname,
+        "__fixtures__",
+        "bbva-statement.installments.synthetic.txt",
+      ),
+      "utf8",
+    );
+    const extracted = asExtractedStatement(installmentFixture);
+
+    it("parses the accented due date with footnote digit and weekday", () => {
+      const result = parser.parse(extracted);
+
+      expect(result.paymentTargets).toHaveLength(3);
+      expect(
+        result.paymentTargets.every(
+          (target) =>
+            target.dueDate?.toISOString() === "2027-03-01T12:00:00.000Z",
+        ),
+      ).toBe(true);
+    });
+
+    it("parses single-line, multi-line and interest-bearing plan entries", () => {
+      const result = parser.parse(extracted);
+
+      expect(result.financingPlans).toHaveLength(3);
+      expect(result.financingPlans[0]).toMatchObject({
+        type: StatementFinancingType.NO_INTEREST,
+        merchantName: "STORE ALPHA",
+        purchaseDate: new Date("2026-06-10T12:00:00.000Z"),
+        originalAmount: 1200,
+        remainingAmount: 600,
+        installmentAmount: 100,
+        installmentNumber: 6,
+        installmentCount: 12,
+        currency: "MXN",
+      });
+      expect(result.financingPlans[1]).toMatchObject({
+        type: StatementFinancingType.NO_INTEREST,
+        merchantName: "STORE BETA WITH A LONG DESCRIPTION CONTINUED",
+        originalAmount: 2400,
+        remainingAmount: 1200,
+        installmentAmount: 200,
+        installmentNumber: 7,
+        installmentCount: 12,
+      });
+      expect(result.financingPlans[2]).toMatchObject({
+        type: StatementFinancingType.INTEREST_BEARING,
+        merchantName: "STORE GAMMA",
+        originalAmount: 1000,
+        remainingAmount: 300.5,
+        installmentAmount: 105.8,
+        installmentNumber: 8,
+        installmentCount: 10,
+      });
+    });
+
+    it("never turns plan entries or regular-section rows into the wrong thing", () => {
+      const result = parser.parse(extracted);
+
+      expect(
+        result.rows.some((row) => row.description.includes("STORE GAMMA")),
+      ).toBe(false);
+      expect(result.rows).toHaveLength(3);
+      expect(
+        result.financingPlans.every((plan) => (plan.sourceRowNumber ?? 0) > 0),
+      ).toBe(true);
+    });
+
+    it("keeps installment billing rows as informational rows", () => {
+      const result = parser.parse(extracted);
+      const installments = result.rows.filter((row) =>
+        /^\d{2} DE \d{2}\b/.test(row.description),
+      );
+
+      expect(installments).toHaveLength(2);
+      for (const row of installments) {
+        expect(row).toMatchObject({
+          section: StatementSection.FINANCING_PLAN,
+          kind: StatementRowKind.REFINANCED_PRINCIPAL,
+          decision: StatementRowDecision.INFO_ONLY,
+          warningCodes: ["DEBT_AMORTIZATION_NOT_EXPENSE"],
+        });
+      }
+      expect(
+        result.rows.find((row) => row.description === "CORNER CAFE"),
+      ).toMatchObject({
+        kind: StatementRowKind.CHARGE,
+        decision: StatementRowDecision.PENDING,
+        warningCodes: [],
+      });
+    });
+
+    it("raises no warning when plan balances match 'Saldo cargo a meses'", () => {
+      const result = parser.parse(extracted);
+
+      expect(result.reconciliation.status).toBe(
+        StatementReconciliationStatus.PASSED,
+      );
+      expect(result.warningCount).toBe(0);
+    });
+
+    it("warns when plan balances differ from 'Saldo cargo a meses'", () => {
+      const result = parser.parse(
+        asExtractedStatement(
+          installmentFixture.replace(
+            "Saldo cargo a meses: $2,100.50",
+            "Saldo cargo a meses: $2,000.00",
+          ),
+        ),
+      );
+
+      expect(result.warningCount).toBe(1);
+    });
+
+    it("does not warn about plan balances when the label is absent", () => {
+      const result = parser.parse(
+        asExtractedStatement(
+          installmentFixture.replace(/^Saldo cargo a meses:.*\n/m, ""),
+        ),
+      );
+
+      expect(result.warningCount).toBe(0);
+    });
+  });
 });

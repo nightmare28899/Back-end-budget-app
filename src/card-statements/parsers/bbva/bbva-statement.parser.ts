@@ -20,7 +20,11 @@ import type {
 import { StatementProcessingError } from "../statement-parser.interface";
 import {
   BBVA_DATE_PATTERN,
-  BBVA_FINANCING_PLAN_PATTERN,
+  BBVA_MONEY_AT_END_PATTERN,
+  BBVA_PLAN_AMOUNTS_PATTERN,
+  BBVA_PLAN_ENTRY_PATTERN,
+  BBVA_PLAN_MONEY_TOKEN,
+  BBVA_PLAN_START_PATTERN,
   BBVA_TRANSACTION_PATTERN,
   type BbvaSourceLine,
   extractBbvaTrailingMoney,
@@ -33,6 +37,17 @@ import {
 } from "./bbva-statement.normalizers";
 
 const PARSER_VERSION = "bbva-text-v1";
+
+const PLAN_MAX_DESCRIPTION_LINES = 4;
+const INSTALLMENT_ROW_PATTERN = /^\d{1,2}\s+DE\s+\d{1,2}\b/i;
+// Informational classification, not an anomaly: excluded from warningCount.
+const INSTALLMENT_WARNING_CODE = "DEBT_AMORTIZATION_NOT_EXPENSE";
+
+interface PendingPlanEntry {
+  date: Date;
+  descriptionParts: string[];
+  sourceRowNumber: number;
+}
 
 interface SummaryValues {
   openingBalance: number | null;
@@ -83,8 +98,16 @@ export class BbvaStatementParser implements StatementParser {
     const reconciliation = this.buildReconciliation(this.extractSummary(lines));
     const financingPlans = this.extractFinancingPlans(lines);
     const warningCount =
-      rows.reduce((total, row) => total + (row.warningCodes?.length ?? 0), 0) +
+      rows.reduce(
+        (total, row) =>
+          total +
+          (row.warningCodes ?? []).filter(
+            (code) => code !== INSTALLMENT_WARNING_CODE,
+          ).length,
+        0,
+      ) +
       (paymentTargets.length === 0 ? 1 : 0) +
+      (this.hasPlansBalanceMismatch(lines, financingPlans) ? 1 : 0) +
       (reconciliation.status === StatementReconciliationStatus.PASSED ? 0 : 1);
 
     return {
@@ -120,12 +143,13 @@ export class BbvaStatementParser implements StatementParser {
   }
 
   private extractDueDate(lines: BbvaSourceLine[]) {
+    // Printed as "Fecha límite de pago:1 lunes, 05-oct-2026": accent, footnote
+    // digit and weekday name all have to be tolerated, so match on the fold.
     const pattern = new RegExp(
-      `FECHA LIMITE DE PAGO\\s*:?\\d*\\s*(?:[A-Z]+,\\s*)?(${BBVA_DATE_PATTERN})`,
-      "i",
+      `FECHA LIMITE DE PAGO\\s*:?\\s*\\d*\\s*(?:[A-Z]+,\\s*)?(${BBVA_DATE_PATTERN})`,
     );
     for (const line of lines) {
-      const match = line.text.match(pattern);
+      const match = line.fold.match(pattern);
       if (match) {
         return parseBbvaDate(match[1]);
       }
@@ -217,8 +241,10 @@ export class BbvaStatementParser implements StatementParser {
         continue;
       }
 
-      const kind = this.classifyRow(description, amount);
-      const installment = /^\d{1,2}\s+DE\s+\d{1,2}\b/i.test(description);
+      const installment = INSTALLMENT_ROW_PATTERN.test(description);
+      const kind = installment
+        ? StatementRowKind.REFINANCED_PRINCIPAL
+        : this.classifyRow(description, amount);
       const section = installment
         ? StatementSection.FINANCING_PLAN
         : StatementSection.CURRENT_CHARGES;
@@ -234,7 +260,10 @@ export class BbvaStatementParser implements StatementParser {
         currency: "MXN",
         kind,
         decision: this.defaultDecision(kind),
-        warningCodes: [],
+        warningCodes:
+          kind === StatementRowKind.REFINANCED_PRINCIPAL
+            ? [INSTALLMENT_WARNING_CODE]
+            : [],
         rawText: line.text,
       });
     }
@@ -268,47 +297,200 @@ export class BbvaStatementParser implements StatementParser {
   ): ParsedStatementFinancingPlan[] {
     const plans: ParsedStatementFinancingPlan[] = [];
     let financingType: StatementFinancingType | null = null;
+    let pending: PendingPlanEntry | null = null;
 
     for (const line of lines) {
-      if (/COMPRAS.*MESES.*SIN INTERESES/.test(line.fold)) {
-        financingType = StatementFinancingType.NO_INTEREST;
-        continue;
-      }
-      if (/COMPRAS.*MESES.*CON INTERESES/.test(line.fold)) {
-        financingType = StatementFinancingType.INTEREST_BEARING;
-        continue;
-      }
-      if (/^CARGOS,?COMPRAS Y ABONOS REGULARES/.test(line.fold)) {
-        financingType = null;
+      const sectionType = this.detectPlanSection(line);
+      if (sectionType !== undefined) {
+        financingType = sectionType;
+        pending = null;
         continue;
       }
       if (!financingType) {
         continue;
       }
 
-      const match = line.text.match(BBVA_FINANCING_PLAN_PATTERN);
-      if (!match) {
-        continue;
+      const step = this.stepPlanEntry(
+        line,
+        pending,
+        financingType,
+        plans.length,
+      );
+      pending = step.pending;
+      if (step.plan) {
+        plans.push(step.plan);
       }
-      const purchaseDate = parseBbvaDate(match[1]);
-      const installmentAmount = parseBbvaMoney(match[5]);
-      if (!purchaseDate || installmentAmount === null) {
-        continue;
-      }
-      plans.push({
-        position: plans.length,
-        type: financingType,
-        merchantName: normalizeBbvaMerchant(match[2]),
-        purchaseDate,
-        installmentAmount: Math.abs(installmentAmount),
-        installmentNumber: Number(match[6]),
-        installmentCount: Number(match[7]),
-        currency: "MXN",
-        sourceRowNumber: line.line,
-      });
     }
 
     return plans;
+  }
+
+  // Returns the financing type a header opens, null when the line closes the
+  // plan tables, or undefined when the line is not a section header at all.
+  private detectPlanSection(
+    line: BbvaSourceLine,
+  ): StatementFinancingType | null | undefined {
+    if (/^CARGOS,?\s*COMPRAS Y ABONOS REGULARES/.test(line.fold)) {
+      return null;
+    }
+    if (
+      /^(?:TOTAL CARGOS|ATENCION DE QUEJAS|NOTAS ACLARATORIAS|GLOSARIO)/.test(
+        line.fold,
+      )
+    ) {
+      return null;
+    }
+    // Headers start the line; numbered footnotes and prose that merely
+    // mention the same words never open a plan table.
+    if (/^COMPRAS.*MESES.*SIN INTERESES/.test(line.fold)) {
+      return StatementFinancingType.NO_INTEREST;
+    }
+    if (/^COMPRAS.*MESES.*CON INTERESES/.test(line.fold)) {
+      return StatementFinancingType.INTEREST_BEARING;
+    }
+    return undefined;
+  }
+
+  private stepPlanEntry(
+    line: BbvaSourceLine,
+    pending: PendingPlanEntry | null,
+    type: StatementFinancingType,
+    position: number,
+  ): {
+    pending: PendingPlanEntry | null;
+    plan: ParsedStatementFinancingPlan | null;
+  } {
+    const single = line.text.match(BBVA_PLAN_ENTRY_PATTERN);
+    if (single) {
+      const date = parseBbvaDate(single[1]);
+      return {
+        pending: null,
+        plan: date
+          ? this.buildPlan(
+              position,
+              type,
+              date,
+              single[2],
+              single[3],
+              single[4],
+              single[5],
+              line.line,
+            )
+          : null,
+      };
+    }
+
+    const start = line.text.match(BBVA_PLAN_START_PATTERN);
+    if (start) {
+      const date = parseBbvaDate(start[1]);
+      const hasMoney = BBVA_MONEY_AT_END_PATTERN.test(line.text);
+      return {
+        pending:
+          date && !hasMoney
+            ? {
+                date,
+                descriptionParts: [start[2]],
+                sourceRowNumber: line.line,
+              }
+            : null,
+        plan: null,
+      };
+    }
+    if (!pending) {
+      return { pending: null, plan: null };
+    }
+
+    const amounts = line.text.match(BBVA_PLAN_AMOUNTS_PATTERN);
+    if (amounts) {
+      return {
+        pending: null,
+        plan: this.buildPlan(
+          position,
+          type,
+          pending.date,
+          pending.descriptionParts.join(" "),
+          amounts[1],
+          amounts[2],
+          amounts[3],
+          pending.sourceRowNumber,
+        ),
+      };
+    }
+
+    // Any other line with money is not part of a description: abandon the entry.
+    if (
+      BBVA_MONEY_AT_END_PATTERN.test(line.text) ||
+      pending.descriptionParts.length >= PLAN_MAX_DESCRIPTION_LINES
+    ) {
+      return { pending: null, plan: null };
+    }
+    return {
+      pending: {
+        ...pending,
+        descriptionParts: [...pending.descriptionParts, line.text],
+      },
+      plan: null,
+    };
+  }
+
+  private buildPlan(
+    position: number,
+    type: StatementFinancingType,
+    purchaseDate: Date,
+    description: string,
+    amountsText: string,
+    installmentNumber: string,
+    installmentCount: string,
+    sourceRowNumber: number,
+  ): ParsedStatementFinancingPlan | null {
+    // "<original> <remaining> [<interest> <VAT>] <required>"
+    const values = Array.from(
+      amountsText.matchAll(new RegExp(BBVA_PLAN_MONEY_TOKEN, "g")),
+      (match) => parseBbvaMoney(match[0]),
+    );
+    const originalAmount = values[0];
+    const remainingAmount = values[1];
+    const installmentAmount = values[values.length - 1];
+    if (
+      originalAmount === null ||
+      remainingAmount === null ||
+      installmentAmount === null
+    ) {
+      return null;
+    }
+    return {
+      position,
+      type,
+      merchantName: normalizeBbvaMerchant(description),
+      purchaseDate,
+      originalAmount: Math.abs(originalAmount),
+      remainingAmount: Math.abs(remainingAmount),
+      installmentAmount: Math.abs(installmentAmount),
+      installmentNumber: Number(installmentNumber),
+      installmentCount: Number(installmentCount),
+      currency: "MXN",
+      sourceRowNumber,
+    };
+  }
+
+  // Page 2 prints the total still owed on every installment plan ("Saldo
+  // cargo a meses"), excluding the installment due this period. When the
+  // parsed plans do not add up to it, some plan was missed or misread.
+  private hasPlansBalanceMismatch(
+    lines: BbvaSourceLine[],
+    plans: ParsedStatementFinancingPlan[],
+  ) {
+    const statedTotal = this.findLabeledAmount(
+      lines,
+      /^SALDO CARGOS? A MESES\b/,
+    );
+    if (statedTotal === null) {
+      return false;
+    }
+    const parsedTotal = roundBbvaMoney(
+      plans.reduce((total, plan) => total + (plan.remainingAmount ?? 0), 0),
+    );
+    return Math.abs(parsedTotal - statedTotal) > 0.01;
   }
 
   private extractSummary(lines: BbvaSourceLine[]): SummaryValues {

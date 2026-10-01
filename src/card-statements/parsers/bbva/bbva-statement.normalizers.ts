@@ -24,12 +24,29 @@ export const BBVA_TRANSACTION_PATTERN = new RegExp(
   "i",
 );
 
-export const BBVA_FINANCING_PLAN_PATTERN = new RegExp(
-  `^(${BBVA_DATE_PATTERN})\\s+(.+?)\\s+(${BBVA_MONEY_PATTERN})\\s+(${BBVA_MONEY_PATTERN})\\s+(${BBVA_MONEY_PATTERN})\\s+(\\d{1,2})\\s+DE\\s+(\\d{1,2})\\s+[\\d.]+%$`,
+// Installment-plan entries: "<date> <description> <original> <remaining>
+// [<interest> <VAT>] <required> <N> de <M> <rate>%". The description may wrap
+// onto extra lines, leaving the amounts on their own line.
+export const BBVA_PLAN_MONEY_TOKEN = "\\$\\s?[\\d,]+\\.\\d{2}";
+const BBVA_PLAN_AMOUNTS = `((?:${BBVA_PLAN_MONEY_TOKEN}\\s+){2,}${BBVA_PLAN_MONEY_TOKEN})\\s+(\\d{1,3})\\s+DE\\s+(\\d{1,3})(?:\\s+\\d+(?:\\.\\d+)?\\s*%)?$`;
+
+export const BBVA_PLAN_ENTRY_PATTERN = new RegExp(
+  `^(${BBVA_DATE_PATTERN})\\s+(.+?)\\s+${BBVA_PLAN_AMOUNTS}`,
+  "i",
+);
+export const BBVA_PLAN_AMOUNTS_PATTERN = new RegExp(
+  `^${BBVA_PLAN_AMOUNTS}`,
+  "i",
+);
+export const BBVA_PLAN_START_PATTERN = new RegExp(
+  `^(${BBVA_DATE_PATTERN})\\s+(\\S.*)$`,
   "i",
 );
 
-const BBVA_MONEY_AT_END_PATTERN = new RegExp(`(${BBVA_MONEY_PATTERN})$`, "i");
+export const BBVA_MONEY_AT_END_PATTERN = new RegExp(
+  `(${BBVA_MONEY_PATTERN})$`,
+  "i",
+);
 
 export interface BbvaSourceLine {
   page: number;
