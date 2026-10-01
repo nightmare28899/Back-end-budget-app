@@ -32,6 +32,10 @@ import {
 import { StatementProcessingError } from "./parsers/statement-parser.interface";
 import { MarkStatementPaidDto } from "./dto/mark-statement-paid.dto";
 import { StatementPaymentsService } from "./statement-payments.service";
+import {
+  MATCHES_REGISTERED_EXPENSE_CODE,
+  matchStatementRowsToExpenses,
+} from "./statement-expense-matcher";
 
 const PDF_SIGNATURE = "%PDF-";
 const DEFAULT_PAGE_SIZE = 20;
@@ -39,6 +43,8 @@ const STATEMENT_IMPORT_FEATURE = "statement_imports";
 const STATEMENT_CYCLE_CONFLICT_CODE = "STATEMENT_CYCLE_CONFLICT";
 const STATEMENT_CYCLE_CONFLICT_MESSAGE =
   "A statement import already owns this card billing cycle";
+const MATCH_WINDOW_DAYS = 3;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const ALLOWED_EXPENSE_KINDS = new Set<StatementRowKind>([
   StatementRowKind.CHARGE,
   StatementRowKind.INTEREST,
@@ -323,6 +329,9 @@ export class CardStatementsService {
               select: { id: true, name: true, bank: true, last4: true },
             },
             expense: { select: { id: true } },
+            matchedExpense: {
+              select: { id: true, title: true, cost: true, date: true },
+            },
           },
         },
       },
@@ -459,6 +468,13 @@ export class CardStatementsService {
           });
         }
 
+        const expenseMatches = await this.matchRegisteredExpenses(
+          tx,
+          userId,
+          statementImport.creditCardId,
+          parsed,
+        );
+
         if (parsed.rows.length > 0) {
           await tx.statementRow.createMany({
             data: parsed.rows.map((row) => ({
@@ -477,7 +493,10 @@ export class CardStatementsService {
               parsedAmount: row.amount,
               parsedCurrency: row.currency,
               parsedKind: row.kind,
-              decision: row.decision ?? StatementRowDecision.PENDING,
+              decision: expenseMatches.has(row.occurrenceKey)
+                ? StatementRowDecision.INFO_ONLY
+                : (row.decision ?? StatementRowDecision.PENDING),
+              matchedExpenseId: expenseMatches.get(row.occurrenceKey) ?? null,
               categoryId: row.categoryId,
               linkedCreditCardId: row.linkedCreditCardId,
               financingPlanId:
@@ -485,7 +504,9 @@ export class CardStatementsService {
                 row.financingPlanPosition === undefined
                   ? null
                   : financingPlanIds.get(row.financingPlanPosition),
-              warningCodes: row.warningCodes,
+              warningCodes: expenseMatches.has(row.occurrenceKey)
+                ? [...(row.warningCodes ?? []), MATCHES_REGISTERED_EXPENSE_CODE]
+                : row.warningCodes,
               rawText: row.rawText,
             })),
           });
@@ -573,14 +594,18 @@ export class CardStatementsService {
             "One or more statement rows do not belong to this import",
           );
         }
+        const rowUpdate = {
+          ...this.buildRowUpdate(row),
+          ...this.buildMatchClearUpdate(currentRow, row),
+        };
         const projectedRow = {
           ...currentRow,
-          ...this.buildRowUpdate(row),
+          ...rowUpdate,
         };
         this.assertAdjustmentJustified(projectedRow);
         await tx.statementRow.update({
           where: { id: row.id },
-          data: this.buildRowUpdate(row),
+          data: rowUpdate,
         });
       }
 
@@ -623,7 +648,7 @@ export class CardStatementsService {
       dto.version,
     );
 
-    const createdExpenseCount = await this.prisma.$transaction(async (tx) => {
+    const confirmation = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.statementImport.updateMany({
         where: {
           id,
@@ -669,7 +694,12 @@ export class CardStatementsService {
       const candidates = current.rows.filter(
         (row) => row.decision === StatementRowDecision.INCLUDE_EXPENSE,
       );
-      if (candidates.length === 0) {
+      const matchedRows = current.rows.filter(
+        (row) =>
+          row.decision === StatementRowDecision.INFO_ONLY &&
+          Boolean(row.matchedExpenseId),
+      );
+      if (candidates.length === 0 && matchedRows.length === 0) {
         throw new BadRequestException(
           "At least one statement row must be included as an expense",
         );
@@ -682,21 +712,39 @@ export class CardStatementsService {
         candidates,
       );
 
-      await tx.expense.createMany({
-        data: candidates.map((row) => ({
-          userId,
-          title: (row.merchantName || row.description).slice(0, 120),
-          merchantName: row.merchantName,
-          cost: row.amount,
-          currency: row.currency,
-          paymentMethod: PaymentMethod.CREDIT_CARD,
-          creditCardId: row.linkedCreditCardId ?? current.creditCardId,
-          categoryId: row.categoryId,
-          date: row.transactionDate as Date,
-          note: "Imported from a reviewed credit-card statement",
-          statementRowId: row.id,
-        })),
-      });
+      if (candidates.length > 0) {
+        await tx.expense.createMany({
+          data: candidates.map((row) => ({
+            userId,
+            title: (row.merchantName || row.description).slice(0, 120),
+            merchantName: row.merchantName,
+            cost: row.amount,
+            currency: row.currency,
+            paymentMethod: PaymentMethod.CREDIT_CARD,
+            creditCardId: row.linkedCreditCardId ?? current.creditCardId,
+            categoryId: row.categoryId,
+            date: row.transactionDate as Date,
+            note: "Imported from a reviewed credit-card statement",
+            statementRowId: row.id,
+          })),
+        });
+      }
+
+      // Rows matched to an already-registered expense adopt that expense
+      // instead of creating a duplicate. An expense that was linked elsewhere
+      // or deleted since staging is skipped, never failing the confirmation.
+      let linkedExpenseCount = 0;
+      for (const row of matchedRows) {
+        const linked = await tx.expense.updateMany({
+          where: {
+            id: row.matchedExpenseId as string,
+            userId,
+            statementRowId: null,
+          },
+          data: { statementRowId: row.id },
+        });
+        linkedExpenseCount += linked.count;
+      }
 
       await tx.statementImport.update({
         where: { id },
@@ -706,7 +754,11 @@ export class CardStatementsService {
         },
       });
 
-      return candidates.length;
+      return {
+        createdExpenseCount: candidates.length,
+        linkedExpenseCount,
+        skippedMatchedExpenseCount: matchedRows.length - linkedExpenseCount,
+      };
     });
 
     const sourceDeletionPending = !(await this.deleteStoredSource(
@@ -717,7 +769,7 @@ export class CardStatementsService {
 
     return {
       import: await this.findOne(userId, id),
-      createdExpenseCount,
+      ...confirmation,
       alreadyConfirmed: false,
       sourceDeletionPending,
     };
@@ -731,6 +783,7 @@ export class CardStatementsService {
       return {
         import: await this.findOne(userId, id),
         deletedExpenseCount: 0,
+        unlinkedExpenseCount: 0,
         alreadyReverted: true,
       };
     }
@@ -741,7 +794,7 @@ export class CardStatementsService {
       throw new ConflictException("Statement import version is stale");
     }
 
-    const deletedExpenseCount = await this.prisma.$transaction(async (tx) => {
+    const revertion = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.statementImport.updateMany({
         where: {
           id,
@@ -757,10 +810,31 @@ export class CardStatementsService {
 
       const importedRows = await tx.statementRow.findMany({
         where: { statementImportId: id },
-        select: { id: true },
+        select: { id: true, matchedExpenseId: true },
       });
+      const rowIds = importedRows.map((row) => row.id);
+      const matchedExpenseIds = importedRows.flatMap((row) =>
+        row.matchedExpenseId ? [row.matchedExpenseId] : [],
+      );
+
+      // Pre-existing (manually registered) expenses adopted by this import are
+      // only unlinked; just the expenses created from rows are deleted.
+      let unlinkedExpenseCount = 0;
+      if (matchedExpenseIds.length > 0) {
+        const unlinked = await tx.expense.updateMany({
+          where: {
+            statementRowId: { in: rowIds },
+            id: { in: matchedExpenseIds },
+          },
+          data: { statementRowId: null },
+        });
+        unlinkedExpenseCount = unlinked.count;
+      }
       const deleted = await tx.expense.deleteMany({
-        where: { statementRowId: { in: importedRows.map((row) => row.id) } },
+        where: {
+          statementRowId: { in: rowIds },
+          id: { notIn: matchedExpenseIds },
+        },
       });
 
       await tx.statementImport.update({
@@ -771,14 +845,17 @@ export class CardStatementsService {
         },
       });
 
-      return deleted.count;
+      return {
+        deletedExpenseCount: deleted.count,
+        unlinkedExpenseCount,
+      };
     });
 
     await this.deleteStoredSource(userId, id, statementImport.sourceObjectKey);
 
     return {
       import: await this.findOne(userId, id),
-      deletedExpenseCount,
+      ...revertion,
       alreadyReverted: false,
     };
   }
@@ -855,17 +932,30 @@ export class CardStatementsService {
   }
 
   private async buildIdempotentConfirmation(userId: string, id: string) {
-    const createdExpenseCount = await this.prisma.expense.count({
-      where: {
-        statementRow: { statementImportId: id },
-        userId,
-      },
-    });
+    const [createdExpenseCount, linkedExpenseCount] = await Promise.all([
+      this.prisma.expense.count({
+        where: {
+          statementRow: { statementImportId: id, matchedExpenseId: null },
+          userId,
+        },
+      }),
+      this.prisma.expense.count({
+        where: {
+          statementRow: {
+            statementImportId: id,
+            matchedExpenseId: { not: null },
+          },
+          userId,
+        },
+      }),
+    ]);
     const statementImport = await this.findOne(userId, id);
 
     return {
       import: statementImport,
       createdExpenseCount,
+      linkedExpenseCount,
+      skippedMatchedExpenseCount: 0,
       alreadyConfirmed: true,
       sourceDeletionPending: statementImport.sourceStored,
     };
@@ -1001,6 +1091,76 @@ export class CardStatementsService {
         ? { decisionNote: this.normalizeDecisionNote(row.decisionNote) }
         : {}),
     };
+  }
+
+  /** Drops a stale expense match once the user overrides the INFO_ONLY decision. */
+  private buildMatchClearUpdate(
+    currentRow: { matchedExpenseId?: string | null; warningCodes?: unknown },
+    update: UpdateStatementRowDto,
+  ) {
+    if (
+      !currentRow.matchedExpenseId ||
+      update.decision === undefined ||
+      update.decision === StatementRowDecision.INFO_ONLY
+    ) {
+      return {};
+    }
+    const warningCodes = Array.isArray(currentRow.warningCodes)
+      ? (currentRow.warningCodes as string[]).filter(
+          (code) => code !== MATCHES_REGISTERED_EXPENSE_CODE,
+        )
+      : [];
+    return { matchedExpenseId: null, warningCodes };
+  }
+
+  private async matchRegisteredExpenses(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    creditCardId: string | null,
+    parsed: ParsedStatementData,
+  ): Promise<Map<string, string>> {
+    if (!creditCardId || parsed.rows.length === 0) {
+      return new Map();
+    }
+    const windowMs = MATCH_WINDOW_DAYS * MS_PER_DAY;
+    const expenses = await tx.expense.findMany({
+      where: {
+        userId,
+        creditCardId,
+        statementRowId: null,
+        date: {
+          gte: new Date(parsed.periodStart.getTime() - windowMs),
+          lte: new Date(parsed.periodEnd.getTime() + windowMs + MS_PER_DAY),
+        },
+      },
+      select: {
+        id: true,
+        title: true,
+        merchantName: true,
+        cost: true,
+        currency: true,
+        date: true,
+        isInstallment: true,
+      },
+    });
+    return matchStatementRowsToExpenses({
+      rows: parsed.rows.map((row) => ({
+        key: row.occurrenceKey,
+        kind: row.kind,
+        decision: row.decision,
+        transactionDate: row.transactionDate,
+        description: row.description,
+        merchantName: row.merchantName,
+        amount: row.amount,
+        currency: row.currency,
+      })),
+      expenses: expenses.map((expense) => ({
+        ...expense,
+        cost: Number(expense.cost),
+      })),
+      periodStart: parsed.periodStart,
+      periodEnd: parsed.periodEnd,
+    });
   }
 
   private getExpenseCandidates(tx: Prisma.TransactionClient, importId: string) {

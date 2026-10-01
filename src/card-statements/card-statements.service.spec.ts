@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  Prisma,
   StatementImportStatus,
   StatementReconciliationStatus,
   StatementRowDecision,
@@ -74,6 +75,8 @@ describe("CardStatementsService", () => {
     expense: {
       createMany: jest.fn(),
       deleteMany: jest.fn(),
+      updateMany: jest.fn(),
+      findMany: jest.fn(),
     },
     category: { count: jest.fn() },
     creditCard: { count: jest.fn() },
@@ -123,6 +126,7 @@ describe("CardStatementsService", () => {
       return Promise.all(input as Promise<unknown>[]);
     });
     entitlements.assertPremium.mockResolvedValue(undefined);
+    tx.expense.findMany.mockResolvedValue([]);
     service = new CardStatementsService(
       prisma as never,
       storage as never,
@@ -903,6 +907,281 @@ describe("CardStatementsService", () => {
     expect(result.import.paymentHistory).toEqual(paymentHistory);
     expect(result.deletedExpenseCount).toBe(1);
     expect(prisma.statementPayment).not.toHaveProperty("deleteMany");
+  });
+
+  describe("matching registered expenses", () => {
+    function stageSetup() {
+      statementImport.findFirst
+        .mockResolvedValueOnce(baseImport(StatementImportStatus.UPLOADED, 1))
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+          reconciliation: {},
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      tx.creditCard.count.mockResolvedValue(1);
+      tx.statementReconciliation.create.mockResolvedValue({});
+      tx.statementRow.createMany.mockResolvedValue({ count: 2 });
+    }
+
+    const registered = {
+      id: "expense-1",
+      title: "Same installment",
+      merchantName: null,
+      cost: new Prisma.Decimal(100),
+      currency: "MXN",
+      date: new Date("2026-08-10T18:00:00.000Z"),
+      isInstallment: false,
+    };
+
+    it("stages a matching row as INFO_ONLY with the expense id and a warning", async () => {
+      stageSetup();
+      tx.expense.findMany.mockResolvedValue([registered]);
+
+      await service.stageParsedStatement(
+        "user-1",
+        "import-1",
+        parsedStatement([parsedRow("r1", 0), parsedRow("r2", 1)]),
+      );
+
+      expect(tx.expense.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: "user-1",
+            creditCardId: "card-1",
+            statementRowId: null,
+          }) as unknown,
+        }),
+      );
+      const data = tx.statementRow.createMany.mock.calls[0][0].data as Array<{
+        occurrenceKey: string;
+        decision?: StatementRowDecision;
+        matchedExpenseId?: string | null;
+        warningCodes?: string[];
+      }>;
+      expect(data[0]).toMatchObject({
+        occurrenceKey: "r1",
+        decision: StatementRowDecision.INFO_ONLY,
+        matchedExpenseId: "expense-1",
+        warningCodes: ["MATCHES_REGISTERED_EXPENSE"],
+      });
+      expect(data[1].matchedExpenseId ?? null).toBeNull();
+      expect(data[1].decision).toBe(StatementRowDecision.PENDING);
+    });
+
+    it("skips matching when the import has no credit card", async () => {
+      stageSetup();
+      statementImport.findFirst.mockReset();
+      statementImport.findFirst
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.UPLOADED, 1),
+          creditCardId: null,
+        })
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+          reconciliation: {},
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+
+      await service.stageParsedStatement(
+        "user-1",
+        "import-1",
+        parsedStatement([parsedRow("r1", 0)]),
+      );
+
+      expect(tx.expense.findMany).not.toHaveBeenCalled();
+    });
+
+    it("links matched expenses on confirm without creating duplicates and counts skipped links", async () => {
+      statementImport.findFirst
+        .mockResolvedValueOnce(
+          baseImport(StatementImportStatus.NEEDS_REVIEW, 2, null),
+        )
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.CONFIRMED, 3, null),
+          reconciliation: { status: StatementReconciliationStatus.PASSED },
+          paymentTargets: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      const matchedRow = (id: string, expenseId: string) => ({
+        id,
+        decision: StatementRowDecision.INFO_ONLY,
+        matchedExpenseId: expenseId,
+        kind: StatementRowKind.CHARGE,
+        transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+        amount: 100,
+        parsedAmount: 100,
+        currency: "MXN",
+        parsedCurrency: "MXN",
+        parsedKind: StatementRowKind.CHARGE,
+        decisionNote: null,
+      });
+      tx.statementImport.findUnique.mockResolvedValue({
+        ...baseImport(StatementImportStatus.NEEDS_REVIEW, 3, null),
+        reconciliation: { status: StatementReconciliationStatus.PASSED },
+        rows: [
+          matchedRow("row-1", "expense-1"),
+          matchedRow("row-2", "expense-2"),
+        ],
+      });
+      tx.expense.updateMany
+        .mockResolvedValueOnce({ count: 1 })
+        .mockResolvedValueOnce({ count: 0 });
+      tx.statementImport.update.mockResolvedValue({});
+      statementImport.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.confirm("user-1", "import-1", {
+        version: 2,
+      });
+
+      expect(tx.expense.createMany).not.toHaveBeenCalled();
+      expect(tx.expense.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: "expense-1", userId: "user-1", statementRowId: null },
+        data: { statementRowId: "row-1" },
+      });
+      expect(result).toMatchObject({
+        createdExpenseCount: 0,
+        linkedExpenseCount: 1,
+        skippedMatchedExpenseCount: 1,
+      });
+    });
+
+    it("unlinks matched expenses on revert and only deletes created ones", async () => {
+      statementImport.findFirst
+        .mockResolvedValueOnce(baseImport(StatementImportStatus.CONFIRMED, 3))
+        .mockResolvedValueOnce({
+          ...baseImport(StatementImportStatus.REVERTED, 4),
+          reconciliation: null,
+          paymentTargets: [],
+          payments: [],
+          instruments: [],
+          financingPlans: [],
+          rows: [],
+        });
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      tx.statementRow.findMany.mockResolvedValue([
+        { id: "row-1", matchedExpenseId: "expense-1" },
+        { id: "row-2", matchedExpenseId: null },
+      ]);
+      tx.expense.updateMany.mockResolvedValue({ count: 1 });
+      tx.expense.deleteMany.mockResolvedValue({ count: 1 });
+      tx.statementImport.update.mockResolvedValue({});
+
+      const result = await service.revert("user-1", "import-1", {
+        version: 3,
+      });
+
+      expect(tx.expense.updateMany).toHaveBeenCalledWith({
+        where: {
+          statementRowId: { in: ["row-1", "row-2"] },
+          id: { in: ["expense-1"] },
+        },
+        data: { statementRowId: null },
+      });
+      expect(tx.expense.deleteMany).toHaveBeenCalledWith({
+        where: {
+          statementRowId: { in: ["row-1", "row-2"] },
+          id: { notIn: ["expense-1"] },
+        },
+      });
+      expect(result).toMatchObject({
+        deletedExpenseCount: 1,
+        unlinkedExpenseCount: 1,
+      });
+    });
+
+    it.each([
+      [StatementRowDecision.INCLUDE_EXPENSE],
+      [StatementRowDecision.EXCLUDE],
+    ])("clears the match when the decision becomes %s", async (decision) => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+      );
+      tx.statementRow.findMany
+        .mockResolvedValueOnce([
+          {
+            id: "row-1",
+            transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+            parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+            amount: 100,
+            parsedAmount: 100,
+            currency: "MXN",
+            parsedCurrency: "MXN",
+            kind: StatementRowKind.CHARGE,
+            parsedKind: StatementRowKind.CHARGE,
+            decisionNote: null,
+            matchedExpenseId: "expense-1",
+            warningCodes: ["MATCHES_REGISTERED_EXPENSE", "OTHER"],
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      jest
+        .spyOn(service, "findOne")
+        .mockResolvedValue({ id: "import-1" } as never);
+
+      await service.updateRows("user-1", "import-1", {
+        version: 2,
+        rows: [{ id: "row-1", decision }],
+      });
+
+      expect(tx.statementRow.update).toHaveBeenCalledWith({
+        where: { id: "row-1" },
+        data: expect.objectContaining({
+          decision,
+          matchedExpenseId: null,
+          warningCodes: ["OTHER"],
+        }) as unknown,
+      });
+    });
+
+    it("keeps the match when the decision stays INFO_ONLY", async () => {
+      statementImport.findFirst.mockResolvedValue(
+        baseImport(StatementImportStatus.NEEDS_REVIEW, 2),
+      );
+      tx.statementRow.findMany
+        .mockResolvedValueOnce([
+          {
+            id: "row-1",
+            transactionDate: new Date("2026-08-10T12:00:00.000Z"),
+            parsedTransactionDate: new Date("2026-08-10T12:00:00.000Z"),
+            amount: 100,
+            parsedAmount: 100,
+            currency: "MXN",
+            parsedCurrency: "MXN",
+            kind: StatementRowKind.CHARGE,
+            parsedKind: StatementRowKind.CHARGE,
+            decisionNote: null,
+            matchedExpenseId: "expense-1",
+            warningCodes: ["MATCHES_REGISTERED_EXPENSE"],
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      tx.statementImport.updateMany.mockResolvedValue({ count: 1 });
+      jest
+        .spyOn(service, "findOne")
+        .mockResolvedValue({ id: "import-1" } as never);
+
+      await service.updateRows("user-1", "import-1", {
+        version: 2,
+        rows: [{ id: "row-1", decision: StatementRowDecision.INFO_ONLY }],
+      });
+
+      const calls = tx.statementRow.update.mock.calls as Array<
+        [{ data: Record<string, unknown> }]
+      >;
+      expect(calls[0][0].data).not.toHaveProperty("matchedExpenseId");
+    });
   });
 
   describe("resume", () => {

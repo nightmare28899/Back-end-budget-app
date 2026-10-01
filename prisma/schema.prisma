@@ -255,6 +255,7 @@ model Expense {
   creditCard                  CreditCard?           @relation(fields: [creditCardId], references: [id], onDelete: SetNull)
   subscription                Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   statementRow                StatementRow?         @relation(fields: [statementRowId], references: [id], onDelete: SetNull)
+  matchedStatementRows        StatementRow[]        @relation("StatementRowMatchedExpense")
   user                        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
@@ -362,6 +363,7 @@ model StatementRow {
   linkedCreditCardId String?
   financingPlanId    String?
   warningCodes       Json?
+  matchedExpenseId   String?
   rawText             String?
   decisionNote       String?
   createdAt          DateTime             @default(now())
@@ -371,12 +373,14 @@ model StatementRow {
   linkedCreditCard   CreditCard?          @relation("StatementRowCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
   financingPlan      StatementFinancingPlan? @relation(fields: [financingPlanId], references: [id], onDelete: SetNull)
   expense            Expense?
+  matchedExpense     Expense?             @relation("StatementRowMatchedExpense", fields: [matchedExpenseId], references: [id], onDelete: SetNull)
 
   @@unique([statementImportId, occurrenceKey])
   @@index([statementImportId, decision, position])
   @@index([categoryId])
   @@index([linkedCreditCardId])
   @@index([financingPlanId])
+  @@index([matchedExpenseId])
   @@map("statement_rows")
 }
 
