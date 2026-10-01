@@ -63,7 +63,11 @@ type ConfirmedStatementRow = {
   periodEnd: Date | null;
   createdAt: Date;
   paymentSummary: StatementPaymentSummary;
-  financingPlans: Array<{ remainingAmount: number | null; currency: string }>;
+  financingPlans: Array<{
+    remainingAmount: number | null;
+    installmentAmount: number | null;
+    currency: string;
+  }>;
   paymentTargets: Array<{
     kind: StatementPaymentTargetKind;
     amount: number;
@@ -79,6 +83,7 @@ type UnbilledExpenseRow = {
   cost: number;
   currency: string;
   date: Date;
+  isInstallment: boolean;
 };
 
 @Injectable()
@@ -258,7 +263,11 @@ export class CreditCardsService {
             select: { amount: true, currency: true, voidedAt: true },
           },
           financingPlans: {
-            select: { remainingAmount: true, currency: true },
+            select: {
+              remainingAmount: true,
+              installmentAmount: true,
+              currency: true,
+            },
           },
         },
         orderBy: [
@@ -269,14 +278,15 @@ export class CreditCardsService {
       }),
       // Credit-card expenses never reconciled into a statement (manual
       // entries, or spend since the last import) are also real debt — but
-      // only once their date has actually arrived, so future-dated
-      // installment rows aren't counted before they're due.
+      // only once their date has actually arrived. Installment rows are the
+      // exception: the whole purchase is committed credit-line debt, so
+      // future-dated installments are fetched too.
       this.prisma.expense.findMany({
         where: {
           userId,
           creditCardId: { in: cards.map((card) => card.id) },
           statementRowId: null,
-          date: { lte: now },
+          OR: [{ date: { lte: now } }, { isInstallment: true }],
         },
         select: {
           id: true,
@@ -284,6 +294,7 @@ export class CreditCardsService {
           cost: true,
           currency: true,
           date: true,
+          isInstallment: true,
         },
       }),
     ]);
@@ -316,6 +327,10 @@ export class CreditCardsService {
         financingPlans: (statement.financingPlans ?? []).map((plan) => ({
           remainingAmount:
             plan.remainingAmount == null ? null : Number(plan.remainingAmount),
+          installmentAmount:
+            plan.installmentAmount == null
+              ? null
+              : Number(plan.installmentAmount),
           currency: plan.currency,
         })),
         paymentTargets: statement.paymentTargets.map((target) => ({
@@ -333,6 +348,7 @@ export class CreditCardsService {
         cost: Number(expense.cost ?? 0),
         currency: expense.currency,
         date: expense.date,
+        isInstallment: expense.isInstallment === true,
       }),
     );
 
@@ -382,12 +398,46 @@ export class CreditCardsService {
       const cardUnbilledExpenses = unbilledExpenses.filter(
         (expense) =>
           expense.creditCardId === card.id &&
-          expense.date.getTime() <= now.getTime() &&
+          // Regular spend counts once it has happened; installment rows are
+          // committed debt even when their payment date is in the future.
+          (expense.isInstallment || expense.date.getTime() <= now.getTime()) &&
           (!statementPeriodEnd ||
             expense.date.getTime() > statementPeriodEnd.getTime()),
       );
       const matchingUnbilledExpenses = cardUnbilledExpenses.filter(
         (expense) => expense.currency === card.currency,
+      );
+      // What the next statement will ask for: the installment due from each
+      // active financing plan plus post-close spend dated up to the next close.
+      // Future installment rows of a purchase beyond that close stay out. Without
+      // a closing day there is no next close, so only plans and regular
+      // (non-installment) post-close spend are counted.
+      const nextPlanInstallments = this.roundMoney(
+        (latestStatement?.financingPlans ?? [])
+          .filter(
+            (plan) =>
+              plan.currency === card.currency &&
+              (plan.remainingAmount ?? 0) > 0,
+          )
+          .reduce(
+            (sum, plan) =>
+              sum +
+              Math.min(plan.installmentAmount ?? 0, plan.remainingAmount ?? 0),
+            0,
+          ),
+      );
+      const nextCloseCutoff = schedule.nextClosingDate
+        ? this.calendarDayEndUtc(schedule.nextClosingDate)
+        : null;
+      const nextCloseSpend = matchingUnbilledExpenses
+        .filter((expense) =>
+          nextCloseCutoff
+            ? expense.date.getTime() <= nextCloseCutoff.getTime()
+            : !expense.isInstallment,
+        )
+        .reduce((sum, expense) => sum + expense.cost, 0);
+      const nextClosePaymentEstimate = this.roundMoney(
+        nextPlanInstallments + nextCloseSpend,
       );
       const currentCycleSpend = this.roundMoney(
         matchingCardExpenses.reduce(
@@ -415,6 +465,12 @@ export class CreditCardsService {
             (sum, expense) => sum + expense.cost,
             0,
           ),
+      );
+      const estimatedRemainingAfterNextClose = this.roundMoney(
+        Math.max(
+          0,
+          outstandingBalance - statementBalance - nextClosePaymentEstimate,
+        ),
       );
       const availableCredit =
         limit == null ? null : this.roundMoney(limit - outstandingBalance);
@@ -537,6 +593,9 @@ export class CreditCardsService {
             ),
           ),
           projectedTotalDebt: outstandingBalance,
+          nextPlanInstallments,
+          nextClosePaymentEstimate,
+          estimatedRemainingAfterNextClose,
           overpaid: latestStatement?.paymentSummary.overpaid ?? 0,
           integrityFlags: latestStatement?.paymentSummary.integrityFlags ?? {
             missingReconciliation: true,
@@ -810,6 +869,22 @@ export class CreditCardsService {
     return Number(value.toFixed(1));
   }
 
+  // End (UTC) of the local calendar day of `value`: expense dates are stored
+  // as date-only UTC values while schedule dates use the server calendar.
+  private calendarDayEndUtc(value: Date) {
+    return new Date(
+      Date.UTC(
+        value.getFullYear(),
+        value.getMonth(),
+        value.getDate(),
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+  }
+
   private utcDayEnd(value: Date) {
     const end = new Date(value);
     end.setUTCHours(23, 59, 59, 999);
@@ -836,6 +911,8 @@ export class CreditCardsService {
         postCloseExpenseCount: number;
         projectedNextCloseAmount: number;
         projectedTotalDebt: number;
+        nextClosePaymentEstimate: number;
+        estimatedRemainingAfterNextClose: number;
         dueDate: string | null;
         projectedNextCloseDate: string | null;
       };
@@ -942,6 +1019,19 @@ export class CreditCardsService {
         totalProjectedDebt: this.roundMoney(
           currencyCards.reduce(
             (sum, card) => sum + card.statementSummary.projectedTotalDebt,
+            0,
+          ),
+        ),
+        totalNextClosePaymentEstimate: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.nextClosePaymentEstimate,
+            0,
+          ),
+        ),
+        totalEstimatedRemainingAfterNextClose: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) =>
+              sum + card.statementSummary.estimatedRemainingAfterNextClose,
             0,
           ),
         ),
