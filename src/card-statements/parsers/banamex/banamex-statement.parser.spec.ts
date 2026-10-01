@@ -89,7 +89,9 @@ describe("BanamexStatementParser", () => {
     expect(result.periodStart.toISOString()).toBe("2026-07-22T12:00:00.000Z");
     expect(result.periodEnd.toISOString()).toBe("2026-08-21T12:00:00.000Z");
     expect(
-      result.rows.filter((row) => row.section === StatementSection.CURRENT_CHARGES),
+      result.rows.filter(
+        (row) => row.section === StatementSection.CURRENT_CHARGES,
+      ),
     ).toHaveLength(2);
     expect(result.reconciliation).toMatchObject({
       currency: "MXN",

@@ -69,13 +69,12 @@ export class SubscriptionsService {
     this.assertFutureDate(nextPaymentDate);
     const paymentMethod =
       normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CREDIT_CARD;
-    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
-      {
+    const creditCardId =
+      await this.creditCardsService.resolveLinkedCreditCardId({
         userId,
         paymentMethod,
         creditCardId: dto.creditCardId,
-      },
-    );
+      });
     const categoryId = await this.resolveCategoryId(userId, dto.categoryId);
 
     const subscription = await this.prisma.subscription.create({
@@ -148,14 +147,13 @@ export class SubscriptionsService {
       dto.paymentMethod !== undefined
         ? normalizePaymentMethod(dto.paymentMethod)
         : existing.paymentMethod;
-    const creditCardId = await this.creditCardsService.resolveLinkedCreditCardId(
-      {
+    const creditCardId =
+      await this.creditCardsService.resolveLinkedCreditCardId({
         userId,
         paymentMethod: nextPaymentMethod,
         creditCardId: dto.creditCardId,
         existingCreditCardId: existing.creditCardId ?? null,
-      },
-    );
+      });
     const categoryId =
       dto.categoryId !== undefined
         ? await this.resolveCategoryId(userId, dto.categoryId)
@@ -207,7 +205,10 @@ export class SubscriptionsService {
       data: { subscriptionId: id, isSubscription: true },
     });
 
-    return { message: "Expenses linked to subscription", linkedCount: owned.length };
+    return {
+      message: "Expenses linked to subscription",
+      linkedCount: owned.length,
+    };
   }
 
   async unlinkExpenses(id: string, userId: string, dto: LinkExpensesDto) {
@@ -218,7 +219,10 @@ export class SubscriptionsService {
       data: { subscriptionId: null, isSubscription: false },
     });
 
-    return { message: "Expenses unlinked from subscription", unlinkedCount: result.count };
+    return {
+      message: "Expenses unlinked from subscription",
+      unlinkedCount: result.count,
+    };
   }
 
   async remove(id: string, userId: string) {

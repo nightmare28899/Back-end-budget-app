@@ -123,7 +123,9 @@ describe("CategoriesService", () => {
       _count: { expenses: 0, subscriptions: 0, statementRows: 0 },
     });
     categoryDelete.mockRejectedValue(
-      Object.assign(new Error("Foreign key constraint failed"), { code: "P2003" }),
+      Object.assign(new Error("Foreign key constraint failed"), {
+        code: "P2003",
+      }),
     );
 
     await expect(service.remove("category-1", "user-1")).rejects.toMatchObject({

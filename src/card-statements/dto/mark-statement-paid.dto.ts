@@ -17,7 +17,8 @@ export class MarkStatementPaidDto {
 
   @ApiPropertyOptional({
     example: 4199.31,
-    description: "Amount paid toward this statement. Required when isPaid is true.",
+    description:
+      "Amount paid toward this statement. Required when isPaid is true.",
   })
   @ValidateIf((dto: MarkStatementPaidDto) => dto.isPaid === true)
   @IsNumber()

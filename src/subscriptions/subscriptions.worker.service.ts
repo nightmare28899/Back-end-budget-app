@@ -208,7 +208,10 @@ export class SubscriptionsWorkerService {
     subscription: SubscriptionReminderCandidate,
     now = new Date(),
   ): Promise<SubscriptionReminderResultItem | null> {
-    const daysRemaining = this.getDaysRemaining(now, subscription.nextPaymentDate);
+    const daysRemaining = this.getDaysRemaining(
+      now,
+      subscription.nextPaymentDate,
+    );
     if (daysRemaining < 0 || daysRemaining > subscription.reminderDays) {
       return null;
     }
@@ -222,8 +225,8 @@ export class SubscriptionsWorkerService {
     }
 
     try {
-      const pushResult = await this.notificationsService.sendSubscriptionReminder(
-        {
+      const pushResult =
+        await this.notificationsService.sendSubscriptionReminder({
           id: subscription.id,
           userId: subscription.userId,
           name: subscription.name,
@@ -231,8 +234,7 @@ export class SubscriptionsWorkerService {
           currency: subscription.currency,
           nextPaymentDate: subscription.nextPaymentDate,
           daysRemaining,
-        },
-      );
+        });
 
       if (pushResult.successCount <= 0) {
         return null;

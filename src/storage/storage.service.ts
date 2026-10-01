@@ -145,13 +145,9 @@ export class StorageService implements OnModuleInit {
 
     try {
       await this.withTimeout("putObject", () =>
-        this.minioClient.putObject(
-          this.bucket,
-          objectName,
-          buffer,
-          size,
-          { "Content-Type": mimeType },
-        ),
+        this.minioClient.putObject(this.bucket, objectName, buffer, size, {
+          "Content-Type": mimeType,
+        }),
       );
     } catch (error) {
       this.logger.error(

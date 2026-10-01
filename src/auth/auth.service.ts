@@ -592,10 +592,7 @@ export class AuthService {
   }
 
   private getRefreshGraceMs() {
-    const rawValue = this.configService.get<string>(
-      "JWT_REFRESH_GRACE",
-      "30s",
-    );
+    const rawValue = this.configService.get<string>("JWT_REFRESH_GRACE", "30s");
     return this.parseDurationToMs(rawValue) ?? DEFAULT_REFRESH_GRACE_MS;
   }
 

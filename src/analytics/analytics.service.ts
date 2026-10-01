@@ -149,7 +149,8 @@ export class AnalyticsService {
     const now = new Date();
     const rangeStart = new Date(`${from}T00:00:00.000Z`);
     const requestedEnd = new Date(`${to}T23:59:59.999Z`);
-    const rangeEnd = requestedEnd.getTime() <= now.getTime() ? requestedEnd : now;
+    const rangeEnd =
+      requestedEnd.getTime() <= now.getTime() ? requestedEnd : now;
     const aggregateRows = await this.prisma.expense.groupBy({
       by: ["creditCardId", "currency"],
       where: {
@@ -179,15 +180,12 @@ export class AnalyticsService {
         })
       : [];
     const cardsById = new Map(cards.map((card) => [card.id, card]));
-    const grouped = new Map<
-      string,
-      CardExpenseBreakdown["groups"][number]
-    >();
+    const grouped = new Map<string, CardExpenseBreakdown["groups"][number]>();
     const currencyTotals = new Map<string, number>();
 
     for (const row of aggregateRows) {
       const ownedCard = row.creditCardId
-        ? cardsById.get(row.creditCardId) ?? null
+        ? (cardsById.get(row.creditCardId) ?? null)
         : null;
       const groupKey = ownedCard?.id ?? "no-card";
       const group = grouped.get(groupKey) ?? {

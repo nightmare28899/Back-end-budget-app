@@ -89,7 +89,8 @@ export function parseStatementDate(value: string) {
     const day = Number(numeric[1]);
     const month = Number(numeric[2]);
     const yearRaw = numeric[3];
-    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+    const year =
+      yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
     return buildValidatedStatementDate(year, month, day);
   }
 

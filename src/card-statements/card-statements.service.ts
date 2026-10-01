@@ -332,16 +332,15 @@ export class CardStatementsService {
       throw new NotFoundException("Statement import not found");
     }
 
-    const { sourceObjectKey, rows, payments, ...publicImport } = statementImport;
+    const { sourceObjectKey, rows, payments, ...publicImport } =
+      statementImport;
     const publicRows = rows.map(({ rawText, ...row }) => {
       void rawText;
       return { ...row, isAdjusted: this.hasAccountingAdjustment(row) };
     });
     return {
       ...publicImport,
-      paymentSummary: this.statementPaymentsService.summarize(
-        statementImport,
-      ),
+      paymentSummary: this.statementPaymentsService.summarize(statementImport),
       paymentHistory: payments,
       rows: publicRows,
       adjustmentCount: publicRows.filter((row) => row.isAdjusted).length,
@@ -837,11 +836,7 @@ export class CardStatementsService {
     return { message: "Statement import deleted" };
   }
 
-  async setPaidStatus(
-    userId: string,
-    id: string,
-    dto: MarkStatementPaidDto,
-  ) {
+  async setPaidStatus(userId: string, id: string, dto: MarkStatementPaidDto) {
     await this.assertPremium(userId);
     const statementImport = await this.findOwnedImport(userId, id);
     if (!dto.isPaid) {

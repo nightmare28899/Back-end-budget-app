@@ -119,17 +119,20 @@ describe("statement import contracts", () => {
     expect(dto.note).toBeUndefined();
   });
 
-  it.each([0, -1, 1.001])("rejects invalid payment amount %s", async (amount) => {
-    const dto = plainToInstance(CreateStatementPaymentDto, {
-      amount,
-      currency: "MXN",
-      paidAt: "2026-09-29T12:00:00.000Z",
-      expectedVersion: 0,
-      idempotencyKey: "e1e8c9f0-c84d-4fe1-9a70-99fd9067df4c",
-    });
+  it.each([0, -1, 1.001])(
+    "rejects invalid payment amount %s",
+    async (amount) => {
+      const dto = plainToInstance(CreateStatementPaymentDto, {
+        amount,
+        currency: "MXN",
+        paidAt: "2026-09-29T12:00:00.000Z",
+        expectedVersion: 0,
+        idempotencyKey: "e1e8c9f0-c84d-4fe1-9a70-99fd9067df4c",
+      });
 
-    expect(await validate(dto)).not.toHaveLength(0);
-  });
+      expect(await validate(dto)).not.toHaveLength(0);
+    },
+  );
 
   it("requires a non-empty correction reason", async () => {
     const dto = plainToInstance(CorrectStatementPaymentDto, {

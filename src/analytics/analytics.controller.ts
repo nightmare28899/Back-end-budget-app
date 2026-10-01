@@ -23,7 +23,9 @@ export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   @Get("cards")
-  @ApiOperation({ summary: "Get expense totals grouped by credit card and currency" })
+  @ApiOperation({
+    summary: "Get expense totals grouped by credit card and currency",
+  })
   async getCardExpenseBreakdown(
     @CurrentUser() user: CurrentUserType,
     @Query() query: CardExpenseBreakdownQueryDto,

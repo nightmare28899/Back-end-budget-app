@@ -9,7 +9,9 @@ export class QueryStatementImportsDto {
   @IsEnum(StatementImportStatus)
   status?: StatementImportStatus;
 
-  @ApiPropertyOptional({ description: "Filter to imports linked to this credit card" })
+  @ApiPropertyOptional({
+    description: "Filter to imports linked to this credit card",
+  })
   @IsOptional()
   @IsUUID()
   creditCardId?: string;
