@@ -481,6 +481,11 @@ export class CreditCardsService {
       const nextPaymentTarget = latestStatement?.paymentTargets.find(
         (target) => target.kind === StatementPaymentTargetKind.NO_INTEREST,
       );
+      const latestMinimumPayment = latestStatement?.paymentTargets.find(
+        (target) =>
+          target.kind === StatementPaymentTargetKind.MINIMUM &&
+          target.currency === card.currency,
+      );
       const previousPaymentTarget = previousStatement?.paymentTargets.find(
         (target) => target.kind === StatementPaymentTargetKind.NO_INTEREST,
       );
@@ -573,6 +578,7 @@ export class CreditCardsService {
             latestStatement?.paymentSummary.noInterestTarget ?? null,
           currentPaymentDue:
             latestStatement?.paymentSummary.currentPaymentDue ?? null,
+          minimumPayment: latestMinimumPayment?.amount ?? null,
           dueDate: latestStatement?.paymentSummary.dueDate
             ? formatDateOnly(new Date(latestStatement.paymentSummary.dueDate))
             : null,

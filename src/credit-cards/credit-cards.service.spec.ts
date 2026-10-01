@@ -305,6 +305,36 @@ describe("CreditCardsService", () => {
     expect(card.statementSummary.projectedTotalDebt).toBe(6452.29);
   });
 
+  it("exposes the minimum payment target of the latest statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 300,
+        minimumPayment: { amount: 42.5 },
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.minimumPayment).toBe(42.5);
+  });
+
+  it("returns a null minimum payment when the statement has none or it is in another currency", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        periodEnd: "2026-03-31",
+        minimumPayment: { amount: 10, currency: "USD" },
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.minimumPayment).toBeNull();
+  });
+
   it("falls back to closing balance for the current payment due", async () => {
     statementImportFindMany.mockResolvedValue([
       statement({
@@ -827,6 +857,7 @@ describe("CreditCardsService", () => {
     periodEnd: string;
     paymentTargetCurrency?: string;
     paymentTargetAmount?: number;
+    minimumPayment?: { amount: number; currency?: string };
     plans?: Array<{
       remainingAmount: number | null;
       installmentAmount?: number | null;
@@ -844,17 +875,30 @@ describe("CreditCardsService", () => {
         currency: options.currency ?? "MXN",
         status: "PASSED",
       },
-      paymentTargets: options.paymentTargetCurrency
-        ? [
-            {
-              kind: "NO_INTEREST",
-              amount: options.paymentTargetAmount ?? options.closingBalance,
-              currency: options.paymentTargetCurrency,
-              dueDate: new Date("2026-04-25T12:00:00.000Z"),
-              position: 0,
-            },
-          ]
-        : [],
+      paymentTargets: [
+        ...(options.paymentTargetCurrency
+          ? [
+              {
+                kind: "NO_INTEREST",
+                amount: options.paymentTargetAmount ?? options.closingBalance,
+                currency: options.paymentTargetCurrency,
+                dueDate: new Date("2026-04-25T12:00:00.000Z"),
+                position: 0,
+              },
+            ]
+          : []),
+        ...(options.minimumPayment
+          ? [
+              {
+                kind: "MINIMUM",
+                amount: options.minimumPayment.amount,
+                currency: options.minimumPayment.currency ?? "MXN",
+                dueDate: new Date("2026-04-25T12:00:00.000Z"),
+                position: 1,
+              },
+            ]
+          : []),
+      ],
       financingPlans: (options.plans ?? []).map((plan) => ({
         remainingAmount: plan.remainingAmount,
         installmentAmount: plan.installmentAmount ?? null,
