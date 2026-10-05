@@ -499,6 +499,86 @@ describe("CreditCardsService", () => {
     );
   });
 
+  it("exposes installment plans from the latest statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+        plans: [
+          {
+            id: "plan-a",
+            type: "INTEREST_BEARING",
+            merchantName: "Store",
+            purchaseDate: new Date("2025-12-15T12:00:00.000Z"),
+            originalAmount: 1200,
+            installmentNumber: 3,
+            installmentCount: 12,
+            installmentAmount: 100,
+            remainingAmount: 900,
+          },
+          {
+            id: "plan-b",
+            installmentNumber: 6,
+            installmentCount: 6,
+            remainingAmount: null,
+          },
+        ],
+      }),
+    ]);
+
+    const [card] = (await service.getOverview("user-1", {})).cards;
+
+    expect(card.installmentPlans).toEqual([
+      {
+        id: "plan-a",
+        type: "INTEREST_BEARING",
+        merchantName: "Store",
+        purchaseDate: "2025-12-15",
+        originalAmount: 1200,
+        installmentNumber: 3,
+        installmentCount: 12,
+        installmentAmount: 100,
+        remainingAmount: 900,
+        currency: "MXN",
+        isFinalInstallment: false,
+        statementPeriodEnd: "2026-03-31",
+      },
+      {
+        id: "plan-b",
+        type: "NO_INTEREST",
+        merchantName: null,
+        purchaseDate: null,
+        originalAmount: null,
+        installmentNumber: 6,
+        installmentCount: 6,
+        installmentAmount: null,
+        remainingAmount: null,
+        currency: "MXN",
+        isFinalInstallment: true,
+        statementPeriodEnd: "2026-03-31",
+      },
+    ]);
+  });
+
+  it("returns empty installmentPlans without a statement or plans", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    expect(
+      (await service.getOverview("user-1", {})).cards[0].installmentPlans,
+    ).toEqual([]);
+
+    statementImportFindMany.mockResolvedValue([]);
+    expect(
+      (await service.getOverview("user-1", {})).cards[0].installmentPlans,
+    ).toEqual([]);
+  });
+
   it("returns the configured currency from create writes", async () => {
     const create = jest
       .fn()
@@ -929,6 +1009,13 @@ describe("CreditCardsService", () => {
       remainingAmount: number | null;
       installmentAmount?: number | null;
       currency?: string;
+      id?: string;
+      type?: "NO_INTEREST" | "INTEREST_BEARING" | "REFINANCED";
+      merchantName?: string | null;
+      purchaseDate?: Date | null;
+      originalAmount?: number | null;
+      installmentNumber?: number | null;
+      installmentCount?: number | null;
     }>;
   }) {
     return {
@@ -966,7 +1053,14 @@ describe("CreditCardsService", () => {
             ]
           : []),
       ],
-      financingPlans: (options.plans ?? []).map((plan) => ({
+      financingPlans: (options.plans ?? []).map((plan, index) => ({
+        id: plan.id ?? `plan-${index}`,
+        type: plan.type ?? "NO_INTEREST",
+        merchantName: plan.merchantName ?? null,
+        purchaseDate: plan.purchaseDate ?? null,
+        originalAmount: plan.originalAmount ?? null,
+        installmentNumber: plan.installmentNumber ?? null,
+        installmentCount: plan.installmentCount ?? null,
         remainingAmount: plan.remainingAmount,
         installmentAmount: plan.installmentAmount ?? null,
         currency: plan.currency ?? "MXN",

@@ -7,6 +7,7 @@ import {
 import {
   BillingCycle,
   PaymentMethod,
+  StatementFinancingType,
   StatementImportStatus,
   StatementPaymentTargetKind,
 } from "@prisma/client";
@@ -65,6 +66,13 @@ type ConfirmedStatementRow = {
   createdAt: Date;
   paymentSummary: StatementPaymentSummary;
   financingPlans: Array<{
+    id: string;
+    type: StatementFinancingType;
+    merchantName: string | null;
+    purchaseDate: Date | null;
+    originalAmount: number | null;
+    installmentNumber: number | null;
+    installmentCount: number | null;
     remainingAmount: number | null;
     installmentAmount: number | null;
     currency: string;
@@ -265,10 +273,18 @@ export class CreditCardsService {
           },
           financingPlans: {
             select: {
+              id: true,
+              type: true,
+              merchantName: true,
+              purchaseDate: true,
+              originalAmount: true,
+              installmentNumber: true,
+              installmentCount: true,
               remainingAmount: true,
               installmentAmount: true,
               currency: true,
             },
+            orderBy: { position: "asc" },
           },
         },
         orderBy: [
@@ -326,6 +342,14 @@ export class CreditCardsService {
         createdAt: statement.createdAt,
         paymentSummary: calculateStatementPaymentSummary(statement),
         financingPlans: (statement.financingPlans ?? []).map((plan) => ({
+          id: plan.id,
+          type: plan.type,
+          merchantName: plan.merchantName ?? null,
+          purchaseDate: plan.purchaseDate ?? null,
+          originalAmount:
+            plan.originalAmount == null ? null : Number(plan.originalAmount),
+          installmentNumber: plan.installmentNumber ?? null,
+          installmentCount: plan.installmentCount ?? null,
           remainingAmount:
             plan.remainingAmount == null ? null : Number(plan.remainingAmount),
           installmentAmount:
@@ -632,6 +656,29 @@ export class CreditCardsService {
           currencyMismatchCount:
             activeSubscriptions.length - matchingSubscriptions.length,
         },
+        installmentPlans: (latestStatement?.financingPlans ?? []).map(
+          (plan) => ({
+            id: plan.id,
+            type: plan.type,
+            merchantName: plan.merchantName,
+            purchaseDate: plan.purchaseDate
+              ? formatDateOnly(plan.purchaseDate)
+              : null,
+            originalAmount: plan.originalAmount,
+            installmentNumber: plan.installmentNumber,
+            installmentCount: plan.installmentCount,
+            installmentAmount: plan.installmentAmount,
+            remainingAmount: plan.remainingAmount,
+            currency: plan.currency,
+            isFinalInstallment:
+              plan.installmentNumber != null &&
+              plan.installmentCount != null &&
+              plan.installmentNumber >= plan.installmentCount,
+            statementPeriodEnd: latestStatement?.periodEnd
+              ? formatDateOnly(latestStatement.periodEnd)
+              : null,
+          }),
+        ),
         currencyMismatchCount,
         flags: {
           missingLimit: limit == null,
