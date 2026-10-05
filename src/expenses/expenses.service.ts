@@ -23,6 +23,10 @@ import {
   InstallmentFrequencyValue,
 } from "./installments/expense-installments.util";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
+import {
+  ExpenseFinancingPlan,
+  FinancingPlanMatcherService,
+} from "./financing-plan-matcher";
 
 const EXPENSE_INCLUDE = {
   category: true,
@@ -49,6 +53,7 @@ type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
 
 type ExpenseWithPresignedUrl = ExpenseWithCategory & {
   imagePresignedUrl?: string;
+  financingPlan: ExpenseFinancingPlan | null;
 };
 
 const MAX_SYNC_BATCH_SIZE = 200;
@@ -76,6 +81,7 @@ export class ExpensesService {
     private readonly storageService: StorageService,
     private readonly creditCardsService: CreditCardsService,
     private readonly entitlementsService: EntitlementsService,
+    private readonly financingPlanMatcher: FinancingPlanMatcherService,
   ) {}
 
   async create(
@@ -144,7 +150,7 @@ export class ExpensesService {
     const endOfDay = new Date();
     endOfDay.setHours(23, 59, 59, 999);
 
-    const expenses = await this.prisma.expense.findMany({
+    const rawExpenses = await this.prisma.expense.findMany({
       where: {
         userId,
         date: { gte: startOfDay, lte: endOfDay },
@@ -152,6 +158,10 @@ export class ExpensesService {
       include: EXPENSE_INCLUDE,
       orderBy: { date: "desc" },
     });
+    const expenses = await this.financingPlanMatcher.enrich(
+      userId,
+      rawExpenses,
+    );
 
     const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
     const currencyBreakdown = this.buildCurrencyBreakdownFromExpenses(expenses);
@@ -292,8 +302,8 @@ export class ExpensesService {
           : [unpaidCondition];
     }
 
-    const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all(
-      [
+    const [rawExpenses, totalCount, sumResult, currencyGroups] =
+      await Promise.all([
         this.prisma.expense.findMany({
           where,
           include: EXPENSE_INCLUDE,
@@ -311,9 +321,12 @@ export class ExpensesService {
           where,
           _sum: { cost: true },
         }),
-      ],
-    );
+      ]);
 
+    const expenses = await this.financingPlanMatcher.enrich(
+      userId,
+      rawExpenses,
+    );
     const total = Number(sumResult._sum.cost ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
     const currencyBreakdown = currencyGroups.map((item) => ({
@@ -503,12 +516,15 @@ export class ExpensesService {
   }
 
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {
-    const expense = await this.prisma.expense.findFirst({
+    const rawExpense = await this.prisma.expense.findFirst({
       where: { id, userId },
       include: EXPENSE_INCLUDE,
     });
 
-    if (!expense) throw new NotFoundException("Expense not found");
+    if (!rawExpense) throw new NotFoundException("Expense not found");
+    const [expense] = await this.financingPlanMatcher.enrich(userId, [
+      rawExpense,
+    ]);
 
     if (expense.imageUrl) {
       try {

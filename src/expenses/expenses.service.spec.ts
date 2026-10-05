@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { ExpensePaymentStatus } from "./dto/query-expense.dto";
 import { ExpensesService } from "./expenses.service";
+import { FinancingPlanMatcherService } from "./financing-plan-matcher";
 
 describe("ExpensesService", () => {
   type WhereCall = [{ where: Prisma.ExpenseWhereInput }];
@@ -8,7 +9,9 @@ describe("ExpensesService", () => {
   const expenseCount = jest.fn<Promise<unknown>, WhereCall>();
   const expenseAggregate = jest.fn<Promise<unknown>, WhereCall>();
   const expenseGroupBy = jest.fn<Promise<unknown>, WhereCall>();
+  const planFindMany = jest.fn<Promise<unknown>, [unknown]>();
   const prisma = {
+    statementFinancingPlan: { findMany: planFindMany },
     expense: {
       findMany: expenseFindMany,
       count: expenseCount,
@@ -27,11 +30,13 @@ describe("ExpensesService", () => {
     expenseCount.mockResolvedValue(0);
     expenseAggregate.mockResolvedValue({ _sum: { cost: null } });
     expenseGroupBy.mockResolvedValue([]);
+    planFindMany.mockResolvedValue([]);
     service = new ExpensesService(
       prisma as never,
       {} as never,
       {} as never,
       {} as never,
+      new FinancingPlanMatcherService(prisma as never),
     );
   });
 
@@ -236,6 +241,69 @@ describe("ExpensesService", () => {
     expect(where.date).toEqual({
       gte: new Date("2026-09-21T00:00:00.000Z"),
       lte: new Date("2026-09-21T12:00:00.000Z"),
+    });
+  });
+
+  describe("financingPlan enrichment", () => {
+    const creditCardExpense = {
+      id: "e1",
+      cost: "12999",
+      date: new Date("2026-03-10T12:00:00.000Z"),
+      paymentMethod: "CREDIT_CARD",
+      creditCardId: "card-1",
+      merchantName: "Amazon",
+      title: "Amazon MX",
+    };
+    const planRow = {
+      type: "NO_INTEREST",
+      merchantName: "AMAZON A MESES",
+      purchaseDate: new Date("2026-03-09T00:00:00.000Z"),
+      originalAmount: "12999.00",
+      installmentAmount: "1083.25",
+      installmentNumber: 7,
+      installmentCount: 12,
+      remainingAmount: null,
+      statementImport: {
+        creditCardId: "card-1",
+        periodEnd: new Date("2026-09-30T00:00:00.000Z"),
+        createdAt: new Date("2026-10-01T00:00:00.000Z"),
+      },
+    };
+
+    it("attaches financingPlan to list responses with one plans query", async () => {
+      expenseFindMany.mockResolvedValue([
+        creditCardExpense,
+        { ...creditCardExpense, id: "e2", cost: "5" },
+      ]);
+      planFindMany.mockResolvedValue([planRow]);
+
+      const result = await service.findAll("user-1", {});
+
+      expect(planFindMany).toHaveBeenCalledTimes(1);
+      expect(result.expenses[0]).toMatchObject({
+        id: "e1",
+        financingPlan: {
+          type: "NO_INTEREST",
+          installmentNumber: 7,
+          installmentCount: 12,
+          installmentAmount: 1083.25,
+          originalAmount: 12999,
+          remainingAmount: null,
+          purchaseDate: "2026-03-09",
+        },
+      });
+      expect(result.expenses[1].financingPlan).toBeNull();
+    });
+
+    it("skips the plans query when no credit-card expense is listed", async () => {
+      expenseFindMany.mockResolvedValue([
+        { ...creditCardExpense, paymentMethod: "CASH" },
+      ]);
+
+      const result = await service.findAll("user-1", {});
+
+      expect(planFindMany).not.toHaveBeenCalled();
+      expect(result.expenses[0].financingPlan).toBeNull();
     });
   });
 });
