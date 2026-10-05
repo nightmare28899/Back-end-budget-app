@@ -1,3 +1,4 @@
+import { ConflictException, NotFoundException } from "@nestjs/common";
 import { CreditCardsService } from "./credit-cards.service";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
@@ -13,11 +14,24 @@ describe("CreditCardsService", () => {
   const entitlementsService = {
     assertPremium: jest.fn().mockResolvedValue(undefined),
   };
+  const creditCardFindFirst = jest.fn();
+  const creditCardDelete = jest.fn();
+  const expenseCount = jest.fn();
+  const subscriptionCount = jest.fn();
+  const statementImportCount = jest.fn();
   const prisma = {
-    creditCard: { findMany: creditCardFindMany },
-    expense: { findMany: expenseFindMany },
-    subscription: { findMany: subscriptionFindMany },
-    statementImport: { findMany: statementImportFindMany },
+    creditCard: {
+      findMany: creditCardFindMany,
+      findFirst: creditCardFindFirst,
+      delete: creditCardDelete,
+    },
+    expense: { findMany: expenseFindMany, count: expenseCount },
+    subscription: { findMany: subscriptionFindMany, count: subscriptionCount },
+    statementImport: {
+      findMany: statementImportFindMany,
+      count: statementImportCount,
+    },
+    $transaction: jest.fn(),
   };
 
   let service: CreditCardsService;
@@ -31,6 +45,9 @@ describe("CreditCardsService", () => {
     expenseFindMany.mockResolvedValue([]);
     subscriptionFindMany.mockResolvedValue([]);
     statementImportFindMany.mockResolvedValue([]);
+    prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
+      fn(prisma),
+    );
     service = new CreditCardsService(
       prisma as never,
       entitlementsService as never,
@@ -38,6 +55,56 @@ describe("CreditCardsService", () => {
   });
 
   afterEach(() => jest.useRealTimers());
+
+  describe("deletePermanently", () => {
+    it("throws NotFound for a card of another user without deleting", async () => {
+      creditCardFindFirst.mockResolvedValue(null);
+
+      await expect(
+        service.deletePermanently("card-1", "other-user"),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(creditCardFindFirst).toHaveBeenCalledTimes(1);
+      expect(creditCardDelete).not.toHaveBeenCalled();
+    });
+
+    it("throws 409 with statementCount and does not delete when statements exist", async () => {
+      creditCardFindFirst.mockResolvedValue(card());
+      statementImportCount.mockResolvedValue(2);
+
+      const error = await service
+        .deletePermanently("card-1", "user-1")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        code: "CREDIT_CARD_HAS_STATEMENTS",
+        message: "creditCardHasStatements",
+        statementCount: 2,
+      });
+      expect(creditCardDelete).not.toHaveBeenCalled();
+    });
+
+    it("deletes in a transaction and reports unlinked counts", async () => {
+      creditCardFindFirst.mockResolvedValue(card());
+      statementImportCount.mockResolvedValue(0);
+      expenseCount.mockResolvedValue(3);
+      subscriptionCount.mockResolvedValue(1);
+      creditCardDelete.mockResolvedValue({});
+
+      await expect(
+        service.deletePermanently("card-1", "user-1"),
+      ).resolves.toEqual({
+        id: "card-1",
+        deleted: true,
+        unlinkedExpenses: 3,
+        unlinkedSubscriptions: 1,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(creditCardDelete).toHaveBeenCalledWith({
+        where: { id: "card-1" },
+      });
+    });
+  });
 
   it("uses only the latest matching-currency statement balance", async () => {
     statementImportFindMany.mockResolvedValue([

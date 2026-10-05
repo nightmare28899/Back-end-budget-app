@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -705,6 +706,32 @@ export class CreditCardsService {
       where: { id },
       data: { isActive: false },
       select: creditCardPublicSelect,
+    });
+  }
+
+  async deletePermanently(id: string, userId: string) {
+    await this.findOne(id, userId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const statementCount = await tx.statementImport.count({
+        where: { creditCardId: id, userId },
+      });
+      if (statementCount > 0) {
+        throw new ConflictException({
+          code: "CREDIT_CARD_HAS_STATEMENTS",
+          message: "creditCardHasStatements",
+          statementCount,
+        });
+      }
+
+      const [unlinkedExpenses, unlinkedSubscriptions] = await Promise.all([
+        tx.expense.count({ where: { creditCardId: id, userId } }),
+        tx.subscription.count({ where: { creditCardId: id, userId } }),
+      ]);
+
+      await tx.creditCard.delete({ where: { id } });
+
+      return { id, deleted: true, unlinkedExpenses, unlinkedSubscriptions };
     });
   }
 
