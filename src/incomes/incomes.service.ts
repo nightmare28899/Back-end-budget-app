@@ -76,6 +76,10 @@ export class IncomesService {
       ];
     }
 
+    if (query.page !== undefined) {
+      return this.findPage(where, query.page, query.limit ?? 20);
+    }
+
     const [incomes, sumResult, currencyGroups] = await Promise.all([
       this.prisma.income.findMany({
         where,
@@ -100,6 +104,47 @@ export class IncomesService {
         currency: item.currency,
         total: roundMoney(Number(item._sum.amount ?? 0)),
       })),
+    };
+  }
+
+  private async findPage(
+    where: Prisma.IncomeWhereInput,
+    page: number,
+    limit: number,
+  ) {
+    const [incomes, totalCount, sumResult, currencyGroups] = await Promise.all([
+      this.prisma.income.findMany({
+        where,
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.income.count({ where }),
+      this.prisma.income.aggregate({ where, _sum: { amount: true } }),
+      this.prisma.income.groupBy({
+        by: ["currency"],
+        where,
+        _sum: { amount: true },
+      }),
+    ]);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+    return {
+      incomes,
+      total: roundMoney(Number(sumResult._sum.amount ?? 0)),
+      count: incomes.length,
+      currencyBreakdown: currencyGroups.map((item) => ({
+        currency: item.currency,
+        total: roundMoney(Number(item._sum.amount ?? 0)),
+      })),
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
     };
   }
 
