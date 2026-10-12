@@ -60,7 +60,11 @@ export class IncomesController {
     @CurrentUser() user: CurrentUserType,
     @Query() query: IncomeSummaryQueryDto,
   ) {
-    return this.incomesService.getSummary(user.id, query.referenceDate);
+    return this.incomesService.getSummary(
+      user.id,
+      query.referenceDate,
+      query.currency,
+    );
   }
 
   @Patch(":id")
