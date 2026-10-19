@@ -95,8 +95,27 @@ export class ExpensesService {
       imageUrl = await this.storageService.uploadFile(file);
     }
 
-    const categoryId = await this.resolveCategoryId(userId, dto);
-    const currency = dto.currency ?? (await this.getUserCurrency(userId));
+    return this.createWithClient({ userId, dto, imageUrl });
+  }
+
+  async createInTransaction(
+    userId: string,
+    dto: CreateExpenseDto,
+    tx: Prisma.TransactionClient,
+  ) {
+    return this.createWithClient({ userId, dto, tx });
+  }
+
+  private async createWithClient(input: {
+    userId: string;
+    dto: CreateExpenseDto;
+    imageUrl?: string;
+    tx?: Prisma.TransactionClient;
+  }) {
+    const { userId, dto, imageUrl, tx } = input;
+    const db = tx ?? this.prisma;
+    const categoryId = await this.resolveCategoryId(userId, dto, db);
+    const currency = dto.currency ?? (await this.getUserCurrency(userId, db));
     const paymentMethod =
       normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH;
     const creditCardId =
@@ -104,6 +123,7 @@ export class ExpensesService {
         userId,
         paymentMethod,
         creditCardId: dto.creditCardId,
+        tx,
       });
 
     const installmentPlan = this.buildInstallmentPlan(dto);
@@ -112,19 +132,22 @@ export class ExpensesService {
         userId,
         "installment_expenses",
       );
-      return this.createInstallmentExpenses({
-        userId,
-        dto,
-        imageUrl,
-        categoryId,
-        currency,
-        paymentMethod,
-        creditCardId,
-        installmentPlan,
-      });
+      return this.createInstallmentExpenses(
+        {
+          userId,
+          dto,
+          imageUrl,
+          categoryId,
+          currency,
+          paymentMethod,
+          creditCardId,
+          installmentPlan,
+        },
+        tx,
+      );
     }
 
-    return this.prisma.expense.create({
+    return db.expense.create({
       data: {
         title: dto.title,
         merchantName: dto.merchantName,
@@ -810,21 +833,24 @@ export class ExpensesService {
     };
   }
 
-  private async createInstallmentExpenses(input: {
-    userId: string;
-    dto: CreateExpenseDto;
-    imageUrl?: string;
-    categoryId: string;
-    currency: string;
-    paymentMethod: PaymentMethod;
-    creditCardId: string | null;
-    installmentPlan: NonNullable<
-      ReturnType<ExpensesService["buildInstallmentPlan"]>
-    >;
-  }) {
+  private async createInstallmentExpenses(
+    input: {
+      userId: string;
+      dto: CreateExpenseDto;
+      imageUrl?: string;
+      categoryId: string;
+      currency: string;
+      paymentMethod: PaymentMethod;
+      creditCardId: string | null;
+      installmentPlan: NonNullable<
+        ReturnType<ExpensesService["buildInstallmentPlan"]>
+      >;
+    },
+    transaction?: Prisma.TransactionClient,
+  ) {
     const installmentGroupId = randomUUID();
 
-    return this.prisma.$transaction(async (tx) => {
+    const createSchedule = async (tx: Prisma.TransactionClient) => {
       const createdExpenses: ExpenseWithCategory[] = [];
 
       for (const scheduleItem of input.installmentPlan.schedule) {
@@ -858,7 +884,10 @@ export class ExpensesService {
       }
 
       return createdExpenses[0];
-    });
+    };
+    return transaction
+      ? createSchedule(transaction)
+      : this.prisma.$transaction(createSchedule);
   }
 
   private async replaceInstallmentExpenses(input: {
@@ -1026,9 +1055,10 @@ export class ExpensesService {
   private async resolveCategoryId(
     userId: string,
     dto: CreateExpenseDto,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<string> {
     if (dto.categoryId) {
-      const category = await this.prisma.category.findFirst({
+      const category = await db.category.findFirst({
         where: { id: dto.categoryId, userId },
         select: { id: true },
       });
@@ -1046,7 +1076,7 @@ export class ExpensesService {
         throw new BadRequestException("categoryName cannot be empty");
       }
 
-      const existing = await this.prisma.category.findFirst({
+      const existing = await db.category.findFirst({
         where: {
           userId,
           name: { equals: name, mode: "insensitive" },
@@ -1058,7 +1088,7 @@ export class ExpensesService {
         return existing.id;
       }
 
-      const created = await this.prisma.category.create({
+      const created = await db.category.create({
         data: {
           userId,
           name,
@@ -1076,8 +1106,11 @@ export class ExpensesService {
     );
   }
 
-  private async getUserCurrency(userId: string): Promise<string> {
-    const user = await this.prisma.user.findUnique({
+  private async getUserCurrency(
+    userId: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<string> {
+    const user = await db.user.findUnique({
       where: { id: userId },
       select: { currency: true },
     });

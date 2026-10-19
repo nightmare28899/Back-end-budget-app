@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  Prisma,
   BillingCycle,
   PaymentMethod,
   StatementFinancingType,
@@ -787,6 +788,7 @@ export class CreditCardsService {
     paymentMethod?: PaymentMethod | null;
     creditCardId?: string | null;
     existingCreditCardId?: string | null;
+    tx?: Prisma.TransactionClient;
   }): Promise<string | null> {
     if (!isCreditCardPaymentMethod(params.paymentMethod)) {
       return null;
@@ -807,6 +809,7 @@ export class CreditCardsService {
 
     await this.assertAssignableCard(params.userId, cardId, {
       allowInactive: params.existingCreditCardId === cardId,
+      tx: params.tx,
     });
 
     return cardId;
@@ -815,9 +818,9 @@ export class CreditCardsService {
   private async assertAssignableCard(
     userId: string,
     creditCardId: string,
-    options?: { allowInactive?: boolean },
+    options?: { allowInactive?: boolean; tx?: Prisma.TransactionClient },
   ) {
-    const card = await this.prisma.creditCard.findFirst({
+    const card = await (options?.tx ?? this.prisma).creditCard.findFirst({
       where: {
         id: creditCardId,
         userId,

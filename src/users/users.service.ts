@@ -220,6 +220,10 @@ export class UsersService {
         avatarUrl: true,
         expenses: { select: { imageUrl: true } },
         savingsGoals: { select: { id: true } },
+        // Nutrition rows cascade from users; their stored originals do not.
+        nutritionUser: {
+          select: { originalFiles: { select: { path: true } } },
+        },
       },
     });
 
@@ -230,6 +234,9 @@ export class UsersService {
     const storedFiles = [
       existingUser.avatarUrl,
       ...existingUser.expenses.map((expense) => expense.imageUrl),
+      ...(existingUser.nutritionUser?.originalFiles ?? []).map(
+        (file) => file.path,
+      ),
     ].filter((value): value is string => Boolean(value));
 
     for (const objectName of new Set(storedFiles)) {
