@@ -19,6 +19,9 @@ ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+# Needed to run `npx prisma migrate deploy` from inside the container.
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 
 EXPOSE 3000
 CMD ["node", "dist/src/main.js"]
