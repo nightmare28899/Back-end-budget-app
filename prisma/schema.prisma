@@ -112,29 +112,30 @@ enum StatementPaymentSource {
 }
 
 model User {
-  id                   String          @id @default(uuid())
-  email                String          @unique
+  id                   String             @id @default(uuid())
+  email                String             @unique
   password             String
   name                 String
-  role                 String          @default("user")
+  role                 String             @default("user")
   avatarUrl            String?
-  dailyBudget          Decimal         @default(0) @db.Decimal(10, 2)
-  budgetAmount         Decimal         @default(0) @db.Decimal(10, 2)
-  budgetPeriod         String          @default("daily")
+  dailyBudget          Decimal            @default(0) @db.Decimal(10, 2)
+  budgetAmount         Decimal            @default(0) @db.Decimal(10, 2)
+  budgetPeriod         String             @default("daily")
   budgetPeriodStart    DateTime?
   budgetPeriodEnd      DateTime?
-  currency             String          @default("MXN")
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
-  isActive             Boolean         @default(true)
-  isPremium            Boolean         @default(false)
-  weeklyReportEnabled  Boolean         @default(true) @map("weekly_report_enabled")
-  monthlyReportEnabled Boolean         @default(false) @map("monthly_report_enabled")
-  termsAcceptedAt      DateTime?       @map("terms_accepted_at")
-  termsVersion         String?         @map("terms_version")
-  deletedAt            DateTime?       @map("deleted_at")
+  currency             String             @default("MXN")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  isActive             Boolean            @default(true)
+  isPremium            Boolean            @default(false)
+  weeklyReportEnabled  Boolean            @default(true) @map("weekly_report_enabled")
+  monthlyReportEnabled Boolean            @default(false) @map("monthly_report_enabled")
+  termsAcceptedAt      DateTime?          @map("terms_accepted_at")
+  termsVersion         String?            @map("terms_version")
+  deletedAt            DateTime?          @map("deleted_at")
   categories           Category[]
   creditCards          CreditCard[]
+  detectedPurchases    DetectedPurchase[]
   expenses             Expense[]
   incomes              Income[]
   subscriptions        Subscription[]
@@ -144,20 +145,21 @@ model User {
   reportHistory        ReportHistory[]
   statementImports     StatementImport[]
   statementPayments    StatementPayment[]
+  nutritionUser        NutritionUser?
 
   @@map("users")
 }
 
 model AuthSession {
-  id                        String    @id @default(uuid())
-  userId                    String
-  currentRefreshTokenId     String    @map("current_refresh_token_id")
-  previousRefreshTokenId    String?   @map("previous_refresh_token_id")
+  id                            String    @id @default(uuid())
+  userId                        String
+  currentRefreshTokenId         String    @map("current_refresh_token_id")
+  previousRefreshTokenId        String?   @map("previous_refresh_token_id")
   previousRefreshTokenExpiresAt DateTime? @map("previous_refresh_token_expires_at")
-  revokedAt                 DateTime? @map("revoked_at")
-  createdAt                 DateTime  @default(now()) @map("created_at")
-  updatedAt                 DateTime  @updatedAt @map("updated_at")
-  user                      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revokedAt                     DateTime? @map("revoked_at")
+  createdAt                     DateTime  @default(now()) @map("created_at")
+  updatedAt                     DateTime  @updatedAt @map("updated_at")
+  user                          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([revokedAt])
@@ -183,40 +185,40 @@ model ReportHistory {
 }
 
 model CreditCard {
-  id            String         @id @default(uuid())
-  name          String
-  bank          String
-  brand         String
-  last4         String
-  color         String?
-  creditLimit   Decimal?       @db.Decimal(10, 2)
-  closingDay    Int?
-  paymentDueDay Int?
-  currency      String         @default("MXN")
-  isActive      Boolean        @default(true)
-  userId        String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  expenses      Expense[]
-  subscriptions Subscription[]
-  statementImports StatementImport[]             @relation("StatementImportCreditCard")
-  statementRows    StatementRow[]                @relation("StatementRowCreditCard")
+  id                   String                        @id @default(uuid())
+  name                 String
+  bank                 String
+  brand                String
+  last4                String
+  color                String?
+  creditLimit          Decimal?                      @db.Decimal(10, 2)
+  closingDay           Int?
+  paymentDueDay        Int?
+  currency             String                        @default("MXN")
+  isActive             Boolean                       @default(true)
+  userId               String
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+  expenses             Expense[]
+  subscriptions        Subscription[]
+  statementImports     StatementImport[]             @relation("StatementImportCreditCard")
+  statementRows        StatementRow[]                @relation("StatementRowCreditCard")
   statementInstruments StatementInstrumentSnapshot[] @relation("StatementInstrumentCreditCard")
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isActive, name])
   @@map("credit_cards")
 }
 
 model Category {
-  id           String    @id @default(uuid())
-  name         String
-  icon         String?
-  color        String?
-  budgetAmount Decimal?  @map("budget_amount") @db.Decimal(10, 2)
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expenses     Expense[]
+  id            String         @id @default(uuid())
+  name          String
+  icon          String?
+  color         String?
+  budgetAmount  Decimal?       @map("budget_amount") @db.Decimal(10, 2)
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expenses      Expense[]
   subscriptions Subscription[]
   statementRows StatementRow[]
 
@@ -271,35 +273,35 @@ model Expense {
 }
 
 model StatementImport {
-  id              String                @id @default(uuid())
+  id              String                        @id @default(uuid())
   userId          String
   creditCardId    String?
-  sourceFormat    StatementSourceFormat @default(PDF)
+  sourceFormat    StatementSourceFormat         @default(PDF)
   sourceFileName  String?
   sourceMimeType  String
   sourceSizeBytes Int
   sourceSha256    String
   sourceObjectKey String?
-  status          StatementImportStatus @default(UPLOADED)
+  status          StatementImportStatus         @default(UPLOADED)
   periodStart     DateTime?
   periodEnd       DateTime?
   parserVersion   String?
-  version         Int                   @default(1)
-  warningCount    Int                   @default(0)
+  version         Int                           @default(1)
+  warningCount    Int                           @default(0)
   failureCode     String?
   failureMessage  String?
   parsedAt        DateTime?
   confirmedAt     DateTime?
   revertedAt      DateTime?
-  isPaid          Boolean               @default(false)
+  isPaid          Boolean                       @default(false)
   paidAt          DateTime?
-  paidAmount      Decimal?              @db.Decimal(12, 2)
-  paymentStatus   StatementPaymentStatus @default(UNPAID)
-  paymentVersion  Int                    @default(0)
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  creditCard      CreditCard?           @relation("StatementImportCreditCard", fields: [creditCardId], references: [id], onDelete: SetNull)
+  paidAmount      Decimal?                      @db.Decimal(12, 2)
+  paymentStatus   StatementPaymentStatus        @default(UNPAID)
+  paymentVersion  Int                           @default(0)
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
+  user            User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creditCard      CreditCard?                   @relation("StatementImportCreditCard", fields: [creditCardId], references: [id], onDelete: SetNull)
   rows            StatementRow[]
   reconciliation  StatementReconciliation?
   paymentTargets  StatementPaymentTarget[]
@@ -331,8 +333,8 @@ model StatementPayment {
   updatedAt         DateTime               @updatedAt
   user              User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   statementImport   StatementImport        @relation(fields: [statementImportId], references: [id], onDelete: Restrict)
-  supersedes        StatementPayment?       @relation("StatementPaymentCorrection", fields: [supersedesId], references: [id], onDelete: Restrict)
-  corrections       StatementPayment[]      @relation("StatementPaymentCorrection")
+  supersedes        StatementPayment?      @relation("StatementPaymentCorrection", fields: [supersedesId], references: [id], onDelete: Restrict)
+  corrections       StatementPayment[]     @relation("StatementPaymentCorrection")
 
   @@unique([userId, idempotencyKey], map: "statement_payments_user_idempotency_key")
   @@index([statementImportId, voidedAt, paidAt], map: "statement_payments_active_statement_idx")
@@ -342,38 +344,38 @@ model StatementPayment {
 }
 
 model StatementRow {
-  id                 String               @id @default(uuid())
-  statementImportId  String
-  occurrenceKey      String
-  section            StatementSection
-  sourceRowNumber    Int?
-  position           Int
-  transactionDate    DateTime?
-  description        String
-  merchantName       String?
-  amount             Decimal              @db.Decimal(12, 2)
-  currency           String               @default("MXN")
-  kind               StatementRowKind
+  id                    String                  @id @default(uuid())
+  statementImportId     String
+  occurrenceKey         String
+  section               StatementSection
+  sourceRowNumber       Int?
+  position              Int
+  transactionDate       DateTime?
+  description           String
+  merchantName          String?
+  amount                Decimal                 @db.Decimal(12, 2)
+  currency              String                  @default("MXN")
+  kind                  StatementRowKind
   parsedTransactionDate DateTime?
-  parsedAmount       Decimal              @db.Decimal(12, 2)
-  parsedCurrency     String
-  parsedKind         StatementRowKind
-  decision           StatementRowDecision @default(PENDING)
-  categoryId         String?
-  linkedCreditCardId String?
-  financingPlanId    String?
-  warningCodes       Json?
-  matchedExpenseId   String?
-  rawText             String?
-  decisionNote       String?
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  statementImport    StatementImport      @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
-  category           Category?            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  linkedCreditCard   CreditCard?          @relation("StatementRowCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
-  financingPlan      StatementFinancingPlan? @relation(fields: [financingPlanId], references: [id], onDelete: SetNull)
-  expense            Expense?
-  matchedExpense     Expense?             @relation("StatementRowMatchedExpense", fields: [matchedExpenseId], references: [id], onDelete: SetNull)
+  parsedAmount          Decimal                 @db.Decimal(12, 2)
+  parsedCurrency        String
+  parsedKind            StatementRowKind
+  decision              StatementRowDecision    @default(PENDING)
+  categoryId            String?
+  linkedCreditCardId    String?
+  financingPlanId       String?
+  warningCodes          Json?
+  matchedExpenseId      String?
+  rawText               String?
+  decisionNote          String?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  statementImport       StatementImport         @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  category              Category?               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  linkedCreditCard      CreditCard?             @relation("StatementRowCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
+  financingPlan         StatementFinancingPlan? @relation(fields: [financingPlanId], references: [id], onDelete: SetNull)
+  expense               Expense?
+  matchedExpense        Expense?                @relation("StatementRowMatchedExpense", fields: [matchedExpenseId], references: [id], onDelete: SetNull)
 
   @@unique([statementImportId, occurrenceKey])
   @@index([statementImportId, decision, position])
@@ -423,17 +425,17 @@ model StatementPaymentTarget {
 }
 
 model StatementInstrumentSnapshot {
-  id                 String                  @id @default(uuid())
+  id                 String                   @id @default(uuid())
   statementImportId  String
   label              String
-  kind               StatementInstrumentKind @default(UNKNOWN)
+  kind               StatementInstrumentKind  @default(UNKNOWN)
   last4              String?
   linkedCreditCardId String?
   position           Int
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  statementImport    StatementImport         @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
-  linkedCreditCard   CreditCard?             @relation("StatementInstrumentCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+  statementImport    StatementImport          @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  linkedCreditCard   CreditCard?              @relation("StatementInstrumentCreditCard", fields: [linkedCreditCardId], references: [id], onDelete: SetNull)
   financingPlans     StatementFinancingPlan[]
 
   @@unique([statementImportId, position], map: "statement_instruments_import_position_key")
@@ -442,23 +444,23 @@ model StatementInstrumentSnapshot {
 }
 
 model StatementFinancingPlan {
-  id                   String                 @id @default(uuid())
+  id                   String                       @id @default(uuid())
   statementImportId    String
   instrumentSnapshotId String?
   type                 StatementFinancingType
   merchantName         String?
   purchaseDate         DateTime?
-  originalAmount       Decimal?               @db.Decimal(12, 2)
-  installmentAmount    Decimal?               @db.Decimal(12, 2)
+  originalAmount       Decimal?                     @db.Decimal(12, 2)
+  installmentAmount    Decimal?                     @db.Decimal(12, 2)
   installmentNumber    Int?
   installmentCount     Int?
-  remainingAmount      Decimal?               @db.Decimal(12, 2)
-  currency             String                 @default("MXN")
+  remainingAmount      Decimal?                     @db.Decimal(12, 2)
+  currency             String                       @default("MXN")
   sourceRowNumber      Int?
   position             Int
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-  statementImport      StatementImport        @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  statementImport      StatementImport              @relation(fields: [statementImportId], references: [id], onDelete: Cascade)
   instrumentSnapshot   StatementInstrumentSnapshot? @relation(fields: [instrumentSnapshotId], references: [id], onDelete: SetNull)
   rows                 StatementRow[]
 
@@ -556,4 +558,319 @@ model SavingsTransaction {
 
   @@index([goalId, createdAt])
   @@map("savings_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Nutrition workspace. Business logic lives in SQL functions created by the
+// 20261002120000_nutrition migration (nutrition_state / nutrition_command).
+// CHECK constraints, the partial unique index "nutrition_one_active_diet", the
+// functions and the snapshot-guard trigger are SQL-only (not representable here).
+// ---------------------------------------------------------------------------
+
+model NutritionUser {
+  id        String   @id
+  name      String
+  timezone  String   @default("UTC")
+  theme     String   @default("light")
+  times     Json     @default("{\"breakfast\":\"08:00\",\"morning_snack\":\"11:00\",\"lunch\":\"14:00\",\"afternoon_snack\":\"17:00\",\"dinner\":\"20:00\"}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [id], references: [id], onDelete: Cascade)
+
+  diets           NutritionDiet[]
+  dietMeals       NutritionDietMeal[]
+  dietMealOptions NutritionDietMealOption[]
+  foodPortions    NutritionFoodPortion[]
+  recipes         NutritionRecipe[]
+  ingredients     NutritionRecipeIngredient[]
+  steps           NutritionRecipeStep[]
+  videos          NutritionRecipeVideo[]
+  favorites       NutritionFavoriteRecipe[]
+  recipeCooks     NutritionRecipeCook[]
+  dailyPlans      NutritionDailyPlan[]
+  dailyMeals      NutritionDailyMeal[]
+  completions     NutritionMealCompletion[]
+  originalFiles   NutritionDietOriginalFile[]
+
+  @@map("nutrition_users")
+}
+
+model NutritionDiet {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String        @map("owner_id")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  title     String
+  startDate DateTime      @map("start_date") @db.Date
+  endDate   DateTime?     @map("end_date") @db.Date
+  status    String        @default("draft")
+  active    Boolean       @default(false)
+  owner     NutritionUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  meals         NutritionDietMeal[]
+  dailyPlans    NutritionDailyPlan[]
+  originalFiles NutritionDietOriginalFile[]
+
+  @@unique([ownerId, id])
+  @@map("nutrition_diets")
+}
+
+model NutritionDietMeal {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String        @map("owner_id")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  dietId    String        @map("diet_id") @db.Uuid
+  type      String
+  owner     NutritionUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  diet      NutritionDiet @relation(fields: [ownerId, dietId], references: [ownerId, id], onDelete: Cascade)
+
+  options NutritionDietMealOption[]
+
+  @@unique([ownerId, id])
+  @@unique([dietId, type])
+  @@map("nutrition_diet_meals")
+}
+
+model NutritionRecipe {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String        @map("owner_id")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  title     String
+  type      String
+  duration  Int           @default(0)
+  notes     String        @default("")
+  imageUrl  String?       @map("image_url")
+  demo      Boolean       @default(false)
+  seedKey   String?       @map("seed_key")
+  owner     NutritionUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  options     NutritionDietMealOption[]
+  portions    NutritionFoodPortion[]
+  ingredients NutritionRecipeIngredient[]
+  steps       NutritionRecipeStep[]
+  videos      NutritionRecipeVideo[]
+  favorites   NutritionFavoriteRecipe[]
+  cooks       NutritionRecipeCook[]
+
+  @@unique([ownerId, id])
+  @@unique([ownerId, seedKey])
+  @@map("nutrition_recipes")
+}
+
+model NutritionDietMealOption {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String            @map("owner_id")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+  mealId    String            @map("meal_id") @db.Uuid
+  title     String
+  notes     String            @default("")
+  position  Int
+  recipeId  String?           @map("recipe_id") @db.Uuid
+  owner     NutritionUser     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  meal      NutritionDietMeal @relation(fields: [ownerId, mealId], references: [ownerId, id], onDelete: Cascade)
+  recipe    NutritionRecipe?  @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: NoAction)
+
+  portions NutritionFoodPortion[]
+
+  @@unique([ownerId, id])
+  @@map("nutrition_diet_meal_options")
+}
+
+model NutritionFoodPortion {
+  id          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId     String                   @map("owner_id")
+  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  optionId    String?                  @map("option_id") @db.Uuid
+  recipeId    String?                  @map("recipe_id") @db.Uuid
+  foodId      String                   @map("food_id")
+  foodName    String                   @map("food_name")
+  quantity    Decimal?                 @db.Decimal(24, 12)
+  unit        String                   @default("")
+  preparation String                   @default("")
+  free        Boolean                  @default(false)
+  position    Int
+  owner       NutritionUser            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  option      NutritionDietMealOption? @relation(fields: [ownerId, optionId], references: [ownerId, id], onDelete: Cascade)
+  recipe      NutritionRecipe?         @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+
+  ingredients NutritionRecipeIngredient[]
+
+  @@unique([ownerId, id])
+  @@map("nutrition_food_portions")
+}
+
+model NutritionRecipeIngredient {
+  id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String               @map("owner_id")
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  recipeId  String               @map("recipe_id") @db.Uuid
+  portionId String               @unique @map("portion_id") @db.Uuid
+  position  Int
+  owner     NutritionUser        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  recipe    NutritionRecipe      @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+  portion   NutritionFoodPortion @relation(fields: [ownerId, portionId], references: [ownerId, id], onDelete: Cascade)
+
+  @@map("nutrition_recipe_ingredients")
+}
+
+model NutritionRecipeStep {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId     String          @map("owner_id")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  recipeId    String          @map("recipe_id") @db.Uuid
+  position    Int
+  instruction String
+  owner       NutritionUser   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  recipe      NutritionRecipe @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+
+  @@unique([recipeId, position])
+  @@map("nutrition_recipe_steps")
+}
+
+model NutritionRecipeVideo {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String          @map("owner_id")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  recipeId  String          @map("recipe_id") @db.Uuid
+  url       String
+  owner     NutritionUser   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  recipe    NutritionRecipe @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+
+  @@map("nutrition_recipe_videos")
+}
+
+model NutritionFavoriteRecipe {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String          @map("owner_id")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  recipeId  String          @map("recipe_id") @db.Uuid
+  owner     NutritionUser   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  recipe    NutritionRecipe @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+
+  @@unique([ownerId, recipeId])
+  @@map("nutrition_favorite_recipes")
+}
+
+model NutritionRecipeCook {
+  id       String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId  String          @map("owner_id")
+  recipeId String          @map("recipe_id") @db.Uuid
+  cookedAt DateTime        @default(now()) @map("cooked_at") @db.Timestamptz(6)
+  owner    NutritionUser   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  recipe   NutritionRecipe @relation(fields: [ownerId, recipeId], references: [ownerId, id], onDelete: Cascade)
+
+  @@index([ownerId, recipeId, cookedAt(sort: Desc)])
+  @@map("nutrition_recipe_cooks")
+}
+
+model NutritionDailyPlan {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String        @map("owner_id")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  dietId    String        @map("diet_id") @db.Uuid
+  date      DateTime      @db.Date
+  timezone  String
+  owner     NutritionUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  diet      NutritionDiet @relation(fields: [ownerId, dietId], references: [ownerId, id], onDelete: NoAction)
+
+  meals NutritionDailyMeal[]
+
+  @@unique([ownerId, id])
+  @@unique([ownerId, date])
+  @@map("nutrition_daily_plans")
+}
+
+model NutritionDailyMeal {
+  id        String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String             @map("owner_id")
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  planId    String             @map("plan_id") @db.Uuid
+  type      String
+  time      String
+  snapshot  Json
+  status    String             @default("pending")
+  owner     NutritionUser      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  plan      NutritionDailyPlan @relation(fields: [ownerId, planId], references: [ownerId, id], onDelete: Cascade)
+
+  completions NutritionMealCompletion[]
+
+  @@unique([ownerId, id])
+  @@unique([planId, type])
+  @@map("nutrition_daily_meals")
+}
+
+model NutritionMealCompletion {
+  id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId     String             @map("owner_id")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  mealId      String             @unique @map("meal_id") @db.Uuid
+  completedAt DateTime           @default(now()) @map("completed_at") @db.Timestamptz(6)
+  owner       NutritionUser      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  meal        NutritionDailyMeal @relation(fields: [ownerId, mealId], references: [ownerId, id], onDelete: Cascade)
+
+  @@map("nutrition_meal_completions")
+}
+
+model NutritionDietOriginalFile {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String        @map("owner_id")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  dietId    String        @map("diet_id") @db.Uuid
+  path      String        @unique
+  name      String
+  mime      String
+  size      Int
+  hash      String
+  owner     NutritionUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  diet      NutritionDiet @relation(fields: [ownerId, dietId], references: [ownerId, id], onDelete: Cascade)
+
+  @@map("nutrition_diet_original_files")
+}
+
+
+enum DetectedPurchaseStatus {
+  PENDING
+  CONFIRMED
+  DISCARDED
+}
+
+enum DetectedPurchaseConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model DetectedPurchase {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint String @db.VarChar(256)
+  sourcePackage String @db.VarChar(255)
+  amountCents BigInt
+  currency String @db.VarChar(3)
+  merchant String? @db.VarChar(120)
+  occurredAtMillis BigInt
+  confidence DetectedPurchaseConfidence
+  possibleDuplicateOf String? @db.VarChar(256)
+  mayBeRegistered Boolean @default(false)
+  status DetectedPurchaseStatus @default(PENDING)
+  expenseId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, fingerprint])
+  @@index([userId, status, occurredAtMillis])
+  @@map("detected_purchases")
 }

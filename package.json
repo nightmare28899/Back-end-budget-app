@@ -18,14 +18,19 @@
     "seed:test-subscriptions": "node prisma/seed-test-subscriptions.mjs",
     "backfill:financing-plans": "ts-node -T --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"resolvePackageJsonExports\":false,\"resolvePackageJsonImports\":false}' scripts/backfill-financing-plans.ts",
     "backfill:banamex-plans": "ts-node -T --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"resolvePackageJsonExports\":false,\"resolvePackageJsonImports\":false}' scripts/backfill-financing-plans.ts --issuer banamex",
+    "try:diet-import": "ts-node -T --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"resolvePackageJsonExports\":false,\"resolvePackageJsonImports\":false}' scripts/try-diet-import.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest --watchman=false --passWithNoTests",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json --watchman=false"
+    "test:e2e": "jest --config ./test/jest-e2e.json --watchman=false",
+    "test:inbox:postgres": "node scripts/test-detected-purchases-postgres.cjs",
+    "seed:inbox:demo": "node scripts/seed-inbox-demo.cjs",
+    "test:inbox:demo": "node --test scripts/seed-inbox-demo.test.cjs"
   },
   "dependencies": {
+    "@google/genai": "^2.27.0",
     "@nestjs/common": "^11.1.17",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.1.17",
@@ -51,7 +56,8 @@
     "pg": "^8.16.3",
     "prisma": "^7.6.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
