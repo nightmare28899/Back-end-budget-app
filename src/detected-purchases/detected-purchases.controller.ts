@@ -14,6 +14,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import { DetectedPurchasesService } from "./detected-purchases.service";
 import {
+  ConfirmDetectedPurchaseAsPaymentDto,
   ConfirmDetectedPurchaseDto,
   DiscardDetectedPurchaseDto,
   QueryDetectedPurchasesDto,
@@ -46,6 +47,15 @@ export class DetectedPurchasesController {
   ) {
     return this.service.confirm(user.id, id, dto);
   }
+  @Post(":id/confirm-as-payment")
+  confirmAsPayment(
+    @CurrentUser() user: CurrentUserType,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: ConfirmDetectedPurchaseAsPaymentDto,
+  ) {
+    return this.service.confirmAsPayment(user.id, id, dto);
+  }
+
   @Post(":id/discard")
   discard(
     @CurrentUser() user: CurrentUserType,

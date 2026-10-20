@@ -4,9 +4,11 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsDefined,
   IsEnum,
   IsInt,
+  IsNumber,
   IsNotEmpty,
   IsObject,
   IsOptional,
@@ -67,3 +69,13 @@ export class ConfirmDetectedPurchaseDto {
   expense: CreateExpenseDto;
 }
 export class DiscardDetectedPurchaseDto {}
+export class ConfirmDetectedPurchaseAsPaymentDto {
+  @IsUUID() cardId: string;
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(9999999999.99)
+  amount: number;
+  @IsDateString() paidAt: string;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}

@@ -23,6 +23,9 @@ import {
 } from "./statement-payment-summary";
 
 const STATEMENT_IMPORT_FEATURE = "statement_imports";
+export const STATEMENT_ALREADY_PAID_MESSAGE = "Statement is already fully paid";
+export const PAYMENT_CURRENCY_MISMATCH_MESSAGE =
+  "Payment currency does not match statement";
 const EARLIEST_PAYMENT_DATE = Date.UTC(2000, 0, 1);
 
 const paymentContextInclude = {
@@ -278,6 +281,22 @@ export class StatementPaymentsService {
     );
   }
 
+  /** Runs the manual-payment write on a caller-owned transaction (premium is the caller's job). */
+  registerWithin(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    statementImportId: string,
+    dto: CreateStatementPaymentDto,
+  ) {
+    return this.createInTransaction(
+      tx,
+      userId,
+      statementImportId,
+      dto,
+      this.parsePaidAt(dto.paidAt),
+    );
+  }
+
   private async createInTransaction(
     tx: Prisma.TransactionClient,
     userId: string,
@@ -320,7 +339,7 @@ export class StatementPaymentsService {
       calculateStatementPaymentSummary(context).paymentStatus ===
       StatementPaymentStatus.PAID
     ) {
-      throw new ConflictException("Statement is already fully paid");
+      throw new ConflictException(STATEMENT_ALREADY_PAID_MESSAGE);
     }
     await this.claimVersion(tx, context, dto.expectedVersion);
     await tx.statementPayment.create({
@@ -425,9 +444,7 @@ export class StatementPaymentsService {
     }
     const expectedCurrency = this.resolveCurrency(context);
     if (currency !== expectedCurrency) {
-      throw new BadRequestException(
-        "Payment currency does not match statement",
-      );
+      throw new BadRequestException(PAYMENT_CURRENCY_MISMATCH_MESSAGE);
     }
     const summary = this.summarize(context);
     if (summary.integrityFlags.conflictingNoInterestTargets) {
@@ -515,7 +532,7 @@ export class StatementPaymentsService {
     );
   }
 
-  private assertPremium(userId: string) {
+  assertPremium(userId: string) {
     return this.entitlementsService.assertPremium(
       userId,
       STATEMENT_IMPORT_FEATURE,

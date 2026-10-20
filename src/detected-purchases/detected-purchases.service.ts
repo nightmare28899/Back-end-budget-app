@@ -3,16 +3,25 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   DetectedPurchase,
   DetectedPurchaseStatus,
   Prisma,
+  StatementImportStatus,
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { CreateStatementPaymentDto } from "../card-statements/dto/create-statement-payment.dto";
 import { ExpensesService } from "../expenses/expenses.service";
 import {
+  PAYMENT_CURRENCY_MISMATCH_MESSAGE,
+  STATEMENT_ALREADY_PAID_MESSAGE,
+  StatementPaymentsService,
+} from "../card-statements/statement-payments.service";
+import {
+  ConfirmDetectedPurchaseAsPaymentDto,
   ConfirmDetectedPurchaseDto,
   QueryDetectedPurchasesDto,
   SyncDetectedPurchasesDto,
@@ -26,11 +35,19 @@ function serialize(row: DetectedPurchase) {
     occurredAtMillis: Number(row.occurredAtMillis),
   };
 }
+// Stable per purchase so a retried confirmation can never create a second payment.
+function paymentKeyFor(purchaseId: string) {
+  const hex = createHash("sha256")
+    .update(`detected-purchase-payment:${purchaseId}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 @Injectable()
 export class DetectedPurchasesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly expenses: ExpensesService,
+    private readonly payments: StatementPaymentsService,
   ) {}
   async sync(userId: string, dto: SyncDetectedPurchasesDto) {
     if (!dto.purchases.length || dto.purchases.length > 100)
@@ -133,6 +150,102 @@ export class DetectedPurchasesService {
       );
     });
   }
+  async confirmAsPayment(
+    userId: string,
+    id: string,
+    dto: ConfirmDetectedPurchaseAsPaymentDto,
+  ) {
+    await this.payments.assertPremium(userId);
+    return this.prisma.$transaction(async (tx) => {
+      const row = await this.lockOwned(tx, { userId, id });
+      if (row.status === DetectedPurchaseStatus.CONFIRMED) {
+        if (row.statementPaymentId) return serialize(row);
+        throw new ConflictException({
+          code: "PURCHASE_ALREADY_CONFIRMED",
+          message: "Purchase was confirmed as an expense",
+        });
+      }
+      if (row.status === DetectedPurchaseStatus.DISCARDED)
+        throw new ConflictException("Purchase was discarded");
+      const card = await tx.creditCard.findFirst({
+        where: { id: dto.cardId, userId },
+        select: { id: true },
+      });
+      if (!card)
+        throw new NotFoundException({
+          code: "CARD_NOT_FOUND",
+          message: "Credit card not found",
+        });
+      const statement = await tx.statementImport.findFirst({
+        where: {
+          userId,
+          creditCardId: card.id,
+          status: StatementImportStatus.CONFIRMED,
+          reconciliation: { isNot: null },
+        },
+        orderBy: [{ periodEnd: "desc" }, { confirmedAt: "desc" }],
+        select: { id: true, paymentVersion: true },
+      });
+      if (!statement)
+        throw new ConflictException({
+          code: "STATEMENT_REQUIRED",
+          message: "A confirmed statement is required to register payments",
+        });
+      const idempotencyKey = paymentKeyFor(row.id);
+      const result = await this.registerPayment(tx, userId, statement.id, {
+        amount: dto.amount,
+        currency: row.currency,
+        paidAt: dto.paidAt,
+        note: dto.note,
+        expectedVersion: statement.paymentVersion,
+        idempotencyKey,
+      });
+      const payment = result.history.find(
+        (item) => item.idempotencyKey === idempotencyKey,
+      );
+      if (!payment)
+        throw new ConflictException("Statement payment was not recorded");
+      return serialize(
+        await tx.detectedPurchase.update({
+          where: { id },
+          data: {
+            status: DetectedPurchaseStatus.CONFIRMED,
+            statementPaymentId: payment.id,
+          },
+        }),
+      );
+    });
+  }
+
+  private async registerPayment(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    statementId: string,
+    dto: CreateStatementPaymentDto,
+  ) {
+    try {
+      return await this.payments.registerWithin(tx, userId, statementId, dto);
+    } catch (error) {
+      if (
+        error instanceof ConflictException &&
+        error.message === STATEMENT_ALREADY_PAID_MESSAGE
+      )
+        throw new ConflictException({
+          code: "STATEMENT_ALREADY_PAID",
+          message: STATEMENT_ALREADY_PAID_MESSAGE,
+        });
+      if (
+        error instanceof BadRequestException &&
+        error.message === PAYMENT_CURRENCY_MISMATCH_MESSAGE
+      )
+        throw new UnprocessableEntityException({
+          code: "PAYMENT_CURRENCY_MISMATCH",
+          message: PAYMENT_CURRENCY_MISMATCH_MESSAGE,
+        });
+      throw error;
+    }
+  }
+
   async discard(userId: string, id: string) {
     return this.prisma.$transaction(async (tx) => {
       const row = await this.lockOwned(tx, { userId, id });
