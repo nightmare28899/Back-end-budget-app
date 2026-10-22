@@ -10,6 +10,7 @@ import {
   PaymentMethod,
   StatementFinancingType,
   StatementImportStatus,
+  StatementPaymentStatus,
   StatementPaymentTargetKind,
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -24,6 +25,8 @@ import {
   calculateStatementPaymentSummary,
   type StatementPaymentSummary,
 } from "../card-statements/statement-payment-summary";
+
+const STATEMENT_CLOSE_TOLERANCE_DAYS = 7;
 
 type CreditCardRow = {
   id: string;
@@ -515,6 +518,16 @@ export class CreditCardsService {
       const previousPaymentTarget = previousStatement?.paymentTargets.find(
         (target) => target.kind === StatementPaymentTargetKind.NO_INTEREST,
       );
+      // A fully paid statement only settles its own cycle: once the card has
+      // closed again, the app must ask for the new period's statement.
+      const needsNewStatement =
+        latestStatement?.paymentSummary.paymentStatus ===
+          StatementPaymentStatus.PAID &&
+        !this.statementCoversLastClose(
+          latestStatement.periodEnd,
+          card.closingDay,
+          now,
+        );
       const nextPayment =
         latestStatement?.paymentSummary.currentPaymentDue != null &&
         latestStatement.paymentSummary.currentPaymentDue > 0
@@ -598,6 +611,8 @@ export class CreditCardsService {
           paidTotal: latestStatement?.paymentSummary.paidTotal ?? 0,
           paymentStatus:
             latestStatement?.paymentSummary.paymentStatus ?? "UNPAID",
+          coversCurrentCycle: !needsNewStatement,
+          needsNewStatement,
           remainingStatement: this.roundMoney(statementBalance),
           deferredInstallmentBalance,
           noInterestTarget:
@@ -870,6 +885,33 @@ export class CreditCardsService {
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const end = this.resolveMonthlyDay(nextMonth, closingDay, true);
     return { start, end };
+  }
+
+  /**
+   * True when the statement period reaches the most recent closing date (today
+   * included). Unknown schedule or period cannot prove staleness, so it covers.
+   */
+  private statementCoversLastClose(
+    periodEnd: Date | null,
+    closingDay: number | null,
+    now: Date,
+  ) {
+    if (!periodEnd || !closingDay || closingDay < 1 || closingDay > 31) {
+      return true;
+    }
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    let lastClose = this.resolveMonthlyDay(now, closingDay);
+    if (lastClose.getTime() > today.getTime()) {
+      lastClose = this.resolveMonthlyDay(
+        new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        closingDay,
+      );
+    }
+    // Tolerate issuers whose period end drifts a few days from the closing day.
+    const tolerance = new Date(lastClose);
+    tolerance.setDate(tolerance.getDate() - STATEMENT_CLOSE_TOLERANCE_DAYS);
+    return formatDateOnly(periodEnd) >= formatDateOnly(tolerance);
   }
 
   private resolveSchedule(card: CreditCardRow, now: Date) {

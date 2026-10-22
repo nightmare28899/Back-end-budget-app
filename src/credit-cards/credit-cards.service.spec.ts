@@ -630,6 +630,71 @@ describe("CreditCardsService", () => {
     expect(update.currency).toBeUndefined();
   });
 
+  describe("statement cycle coverage", () => {
+    // Card closes on day 15.
+    const summaryAt = async (
+      now: string,
+      periodEnd: string | null,
+      paidAmount: number,
+    ) => {
+      jest.setSystemTime(new Date(now));
+      statementImportFindMany.mockResolvedValue(
+        periodEnd
+          ? [statement({ closingBalance: 500, paidAmount, periodEnd })]
+          : [],
+      );
+      return (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+    };
+
+    it("flags a paid statement from a closed past cycle as needing a new statement", async () => {
+      const summary = await summaryAt(
+        "2026-04-16T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.paymentStatus).toBe("PAID");
+      expect(summary.coversCurrentCycle).toBe(false);
+      expect(summary.needsNewStatement).toBe(true);
+    });
+
+    it("flags it on the closing day itself", async () => {
+      const summary = await summaryAt(
+        "2026-04-15T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.needsNewStatement).toBe(true);
+    });
+
+    it("does not flag a paid statement of the last closed cycle", async () => {
+      const summary = await summaryAt(
+        "2026-04-08T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.paymentStatus).toBe("PAID");
+      expect(summary.coversCurrentCycle).toBe(true);
+      expect(summary.needsNewStatement).toBe(false);
+    });
+
+    it("does not flag an unpaid statement even if old", async () => {
+      const summary = await summaryAt(
+        "2026-04-16T10:00:00.000Z",
+        "2026-03-15",
+        0,
+      );
+      expect(summary.paymentStatus).toBe("UNPAID");
+      expect(summary.needsNewStatement).toBe(false);
+    });
+
+    it("does not flag a card without statements", async () => {
+      const summary = await summaryAt("2026-04-16T10:00:00.000Z", null, 0);
+      expect(summary.coversCurrentCycle).toBe(true);
+      expect(summary.needsNewStatement).toBe(false);
+    });
+  });
+
   describe("next close payment estimate", () => {
     // System time 2026-04-08; the card closes on day 15 => next close 2026-04-15.
     it("estimates the next payment from plan installments only", async () => {
