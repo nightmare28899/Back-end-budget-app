@@ -365,6 +365,35 @@ describe("DetectedPurchasesService", () => {
       expect(tx.detectedPurchase.update).not.toHaveBeenCalled();
     });
 
+    it("returns STATEMENT_REQUIRED when the paid statement belongs to an older cycle than the payment", async () => {
+      tx.statementImport.findFirst.mockResolvedValue({
+        id: "import-1",
+        paymentVersion: 3,
+        periodEnd: new Date("2026-09-22T00:00:00.000Z"),
+      });
+      payments.registerWithin.mockRejectedValue(
+        new ConflictException(STATEMENT_ALREADY_PAID_MESSAGE),
+      );
+      expect(
+        await errorCode(service.confirmAsPayment("owner", row.id, dto)),
+      ).toBe("STATEMENT_REQUIRED");
+      expect(tx.detectedPurchase.update).not.toHaveBeenCalled();
+    });
+
+    it("keeps STATEMENT_ALREADY_PAID when the payment falls within the paid statement cycle", async () => {
+      tx.statementImport.findFirst.mockResolvedValue({
+        id: "import-1",
+        paymentVersion: 3,
+        periodEnd: new Date("2026-10-22T00:00:00.000Z"),
+      });
+      payments.registerWithin.mockRejectedValue(
+        new ConflictException(STATEMENT_ALREADY_PAID_MESSAGE),
+      );
+      expect(
+        await errorCode(service.confirmAsPayment("owner", row.id, dto)),
+      ).toBe("STATEMENT_ALREADY_PAID");
+    });
+
     it("maps currency mismatch to PAYMENT_CURRENCY_MISMATCH and passes other errors through", async () => {
       payments.registerWithin.mockRejectedValue(
         new BadRequestException(PAYMENT_CURRENCY_MISMATCH_MESSAGE),

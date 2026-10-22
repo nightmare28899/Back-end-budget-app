@@ -184,7 +184,7 @@ export class DetectedPurchasesService {
           reconciliation: { isNot: null },
         },
         orderBy: [{ periodEnd: "desc" }, { confirmedAt: "desc" }],
-        select: { id: true, paymentVersion: true },
+        select: { id: true, paymentVersion: true, periodEnd: true },
       });
       if (!statement)
         throw new ConflictException({
@@ -192,14 +192,20 @@ export class DetectedPurchasesService {
           message: "A confirmed statement is required to register payments",
         });
       const idempotencyKey = paymentKeyFor(row.id);
-      const result = await this.registerPayment(tx, userId, statement.id, {
-        amount: dto.amount,
-        currency: row.currency,
-        paidAt: dto.paidAt,
-        note: dto.note,
-        expectedVersion: statement.paymentVersion,
-        idempotencyKey,
-      });
+      const result = await this.registerPayment(
+        tx,
+        userId,
+        statement.id,
+        {
+          amount: dto.amount,
+          currency: row.currency,
+          paidAt: dto.paidAt,
+          note: dto.note,
+          expectedVersion: statement.paymentVersion,
+          idempotencyKey,
+        },
+        statement.periodEnd,
+      );
       const payment = result.history.find(
         (item) => item.idempotencyKey === idempotencyKey,
       );
@@ -222,6 +228,7 @@ export class DetectedPurchasesService {
     userId: string,
     statementId: string,
     dto: CreateStatementPaymentDto,
+    periodEnd: Date | null,
   ) {
     try {
       return await this.payments.registerWithin(tx, userId, statementId, dto);
@@ -229,11 +236,19 @@ export class DetectedPurchasesService {
       if (
         error instanceof ConflictException &&
         error.message === STATEMENT_ALREADY_PAID_MESSAGE
-      )
+      ) {
+        // The latest statement is paid but the payment is dated after its
+        // cycle: it belongs to a newer statement that is not uploaded yet.
+        if (isAfterPeriodEnd(dto.paidAt, periodEnd))
+          throw new ConflictException({
+            code: "STATEMENT_REQUIRED",
+            message: "A confirmed statement is required to register payments",
+          });
         throw new ConflictException({
           code: "STATEMENT_ALREADY_PAID",
           message: STATEMENT_ALREADY_PAID_MESSAGE,
         });
+      }
       if (
         error instanceof BadRequestException &&
         error.message === PAYMENT_CURRENCY_MISMATCH_MESSAGE
@@ -273,4 +288,12 @@ export class DetectedPurchasesService {
       throw new NotFoundException("Detected purchase not found");
     return rows[0];
   }
+}
+
+function isAfterPeriodEnd(paidAt: string, periodEnd: Date | null): boolean {
+  if (!periodEnd) return false;
+  const paid = new Date(paidAt);
+  if (Number.isNaN(paid.getTime())) return false;
+  // Compare calendar days (UTC): a payment on the cut date still belongs to it.
+  return paid.toISOString().slice(0, 10) > periodEnd.toISOString().slice(0, 10);
 }
