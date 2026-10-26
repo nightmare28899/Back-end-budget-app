@@ -10,6 +10,7 @@ export const creditCardPublicSelect = {
   paymentDueDay: true,
   currency: true,
   isActive: true,
+  sortOrder: true,
   createdAt: true,
   updatedAt: true,
 } as const;
