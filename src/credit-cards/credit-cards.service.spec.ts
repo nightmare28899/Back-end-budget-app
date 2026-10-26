@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from "@nestjs/common";
 import { CreditCardsService } from "./credit-cards.service";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
@@ -16,6 +20,9 @@ describe("CreditCardsService", () => {
   };
   const creditCardFindFirst = jest.fn();
   const creditCardDelete = jest.fn();
+  const creditCardAggregate = jest.fn();
+  const creditCardCreate = jest.fn();
+  const creditCardUpdate = jest.fn();
   const expenseCount = jest.fn();
   const subscriptionCount = jest.fn();
   const statementImportCount = jest.fn();
@@ -24,6 +31,9 @@ describe("CreditCardsService", () => {
       findMany: creditCardFindMany,
       findFirst: creditCardFindFirst,
       delete: creditCardDelete,
+      aggregate: creditCardAggregate,
+      create: creditCardCreate,
+      update: creditCardUpdate,
     },
     expense: { findMany: expenseFindMany, count: expenseCount },
     subscription: { findMany: subscriptionFindMany, count: subscriptionCount },
@@ -33,6 +43,10 @@ describe("CreditCardsService", () => {
     },
     $transaction: jest.fn(),
   };
+
+  type CallArgs = Array<[Record<string, unknown>]>;
+  const firstArg = (mock: jest.Mock): Record<string, unknown> =>
+    (mock.mock.calls as CallArgs)[0][0];
 
   let service: CreditCardsService;
 
@@ -55,6 +69,139 @@ describe("CreditCardsService", () => {
   });
 
   afterEach(() => jest.useRealTimers());
+
+  describe("create", () => {
+    const dto = {
+      name: "Rewards",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+    } as CreateCreditCardDto;
+
+    it("appends the new card after the user's highest sortOrder", async () => {
+      creditCardAggregate.mockResolvedValue({ _max: { sortOrder: 4 } });
+      creditCardCreate.mockResolvedValue({ id: "new" });
+
+      await service.create("user-1", dto);
+
+      expect(creditCardAggregate).toHaveBeenCalledWith({
+        where: { userId: "user-1" },
+        _max: { sortOrder: true },
+      });
+      expect(
+        (firstArg(creditCardCreate).data as { sortOrder: number }).sortOrder,
+      ).toBe(5);
+    });
+
+    it("starts at sortOrder 0 when the user has no cards", async () => {
+      creditCardAggregate.mockResolvedValue({ _max: { sortOrder: null } });
+      creditCardCreate.mockResolvedValue({ id: "new" });
+
+      await service.create("user-1", dto);
+
+      expect(
+        (firstArg(creditCardCreate).data as { sortOrder: number }).sortOrder,
+      ).toBe(0);
+    });
+  });
+
+  describe("list ordering", () => {
+    const expectedOrder = [
+      { sortOrder: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ];
+
+    it("findAll orders by sortOrder, createdAt, id", async () => {
+      await service.findAll("user-1");
+
+      expect(firstArg(creditCardFindMany).orderBy).toEqual(expectedOrder);
+    });
+
+    it("getOverview orders by sortOrder, createdAt, id and exposes sortOrder", async () => {
+      creditCardFindMany.mockResolvedValue([{ ...card(), sortOrder: 3 }]);
+
+      const result = await service.getOverview("user-1");
+
+      expect(firstArg(creditCardFindMany).orderBy).toEqual(expectedOrder);
+      expect(result.cards[0]).toMatchObject({ sortOrder: 3 });
+    });
+  });
+
+  describe("reorder", () => {
+    const owned = (...ids: string[]) =>
+      ids.map((id, index) => ({ id, sortOrder: index }));
+
+    it("rewrites sortOrder to 0..n-1 in the given order inside one transaction", async () => {
+      creditCardFindMany
+        .mockResolvedValueOnce(owned("a", "b", "c"))
+        .mockResolvedValueOnce([{ id: "c" }, { id: "a" }, { id: "b" }]);
+
+      const result = await service.reorder("user-1", ["c", "a", "b"]);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(
+        (creditCardUpdate.mock.calls as CallArgs).map((call) => call[0]),
+      ).toEqual([
+        { where: { id: "c" }, data: { sortOrder: 0 }, select: { id: true } },
+        { where: { id: "a" }, data: { sortOrder: 1 }, select: { id: true } },
+        { where: { id: "b" }, data: { sortOrder: 2 }, select: { id: true } },
+      ]);
+      expect(result).toEqual([{ id: "c" }, { id: "a" }, { id: "b" }]);
+    });
+
+    it("scopes the ownership lookup to the authenticated user", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a"));
+
+      await service.reorder("user-1", ["a"]);
+
+      expect(firstArg(creditCardFindMany).where).toEqual({
+        userId: "user-1",
+      });
+      expect(entitlementsService.assertPremium).toHaveBeenCalledWith(
+        "user-1",
+        "credit_cards_catalog",
+      );
+    });
+
+    it("rejects an id that is unknown or belongs to another user without writing", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a", "b"));
+
+      await expect(
+        service.reorder("user-1", ["a", "foreign"]),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(creditCardUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate ids without writing", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a", "b"));
+
+      await expect(
+        service.reorder("user-1", ["a", "a"]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(creditCardUpdate).not.toHaveBeenCalled();
+    });
+
+    it("places unlisted cards after the listed ones keeping their relative order", async () => {
+      creditCardFindMany
+        .mockResolvedValueOnce(owned("a", "b", "c", "d"))
+        .mockResolvedValueOnce([]);
+
+      await service.reorder("user-1", ["d", "b"]);
+
+      expect(
+        (creditCardUpdate.mock.calls as CallArgs).map(([arg]) => [
+          (arg.where as { id: string }).id,
+          (arg.data as { sortOrder: number }).sortOrder,
+        ]),
+      ).toEqual([
+        ["d", 0],
+        ["b", 1],
+        ["a", 2],
+        ["c", 3],
+      ]);
+    });
+  });
 
   describe("deletePermanently", () => {
     it("throws NotFound for a card of another user without deleting", async () => {
@@ -583,8 +730,14 @@ describe("CreditCardsService", () => {
     const create = jest
       .fn()
       .mockResolvedValue({ id: "card-1", currency: "USD" });
+    const aggregate = jest
+      .fn()
+      .mockResolvedValue({ _max: { sortOrder: null } });
+    const txClient = { creditCard: { create, aggregate } };
     const writeService = new CreditCardsService(
-      { creditCard: { create } } as never,
+      {
+        $transaction: (fn: (tx: unknown) => unknown) => fn(txClient),
+      } as never,
       entitlementsService as never,
     );
 
@@ -1025,6 +1178,7 @@ describe("CreditCardsService", () => {
       isActive: true,
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
       updatedAt: new Date("2026-04-01T00:00:00.000Z"),
+      sortOrder: 0,
     };
   }
 

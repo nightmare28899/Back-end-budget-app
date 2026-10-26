@@ -28,6 +28,12 @@ import {
 
 const STATEMENT_CLOSE_TOLERANCE_DAYS = 7;
 
+const CREDIT_CARD_ORDER_BY: Prisma.CreditCardOrderByWithRelationInput[] = [
+  { sortOrder: "asc" },
+  { createdAt: "asc" },
+  { id: "asc" },
+];
+
 type CreditCardRow = {
   id: string;
   name: string;
@@ -40,6 +46,7 @@ type CreditCardRow = {
   paymentDueDay: number | null;
   currency: string;
   isActive: boolean;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -111,21 +118,29 @@ export class CreditCardsService {
       userId,
       "credit_cards_catalog",
     );
-    return this.prisma.creditCard.create({
-      data: {
-        userId,
-        name: dto.name,
-        bank: dto.bank,
-        brand: dto.brand,
-        last4: dto.last4,
-        color: dto.color,
-        creditLimit: dto.creditLimit,
-        closingDay: dto.closingDay,
-        paymentDueDay: dto.paymentDueDay,
-        currency: dto.currency ?? "MXN",
-        isActive: dto.isActive ?? true,
-      },
-      select: creditCardPublicSelect,
+    return this.prisma.$transaction(async (tx) => {
+      const { _max } = await tx.creditCard.aggregate({
+        where: { userId },
+        _max: { sortOrder: true },
+      });
+
+      return tx.creditCard.create({
+        data: {
+          userId,
+          sortOrder: (_max.sortOrder ?? -1) + 1,
+          name: dto.name,
+          bank: dto.bank,
+          brand: dto.brand,
+          last4: dto.last4,
+          color: dto.color,
+          creditLimit: dto.creditLimit,
+          closingDay: dto.closingDay,
+          paymentDueDay: dto.paymentDueDay,
+          currency: dto.currency ?? "MXN",
+          isActive: dto.isActive ?? true,
+        },
+        select: creditCardPublicSelect,
+      });
     });
   }
 
@@ -140,7 +155,7 @@ export class CreditCardsService {
         userId,
         ...(query?.includeInactive ? {} : { isActive: true }),
       },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }, { createdAt: "desc" }],
+      orderBy: CREDIT_CARD_ORDER_BY,
       select: creditCardPublicSelect,
     });
   }
@@ -179,7 +194,7 @@ export class CreditCardsService {
         userId,
         ...(query?.includeInactive ? {} : { isActive: true }),
       },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }, { createdAt: "desc" }],
+      orderBy: CREDIT_CARD_ORDER_BY,
       select: creditCardPublicSelect,
     })) as CreditCardRow[];
 
@@ -579,6 +594,7 @@ export class CreditCardsService {
         closingDay: card.closingDay,
         paymentDueDay: card.paymentDueDay,
         isActive: card.isActive,
+        sortOrder: card.sortOrder,
         createdAt: card.createdAt,
         updatedAt: card.updatedAt,
         currency: card.currency,
@@ -739,6 +755,50 @@ export class CreditCardsService {
       },
       cards: overviewCards,
     };
+  }
+
+  async reorder(userId: string, ids: string[]) {
+    await this.entitlementsService.assertPremium(
+      userId,
+      "credit_cards_catalog",
+    );
+
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException("Credit card ids must be unique");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const owned = await tx.creditCard.findMany({
+        where: { userId },
+        orderBy: CREDIT_CARD_ORDER_BY,
+        select: { id: true },
+      });
+      const ownedIds = new Set(owned.map((card) => card.id));
+
+      if (ids.some((id) => !ownedIds.has(id))) {
+        throw new NotFoundException("Credit card not found");
+      }
+
+      const listed = new Set(ids);
+      const finalOrder = [
+        ...ids,
+        ...owned.map((card) => card.id).filter((id) => !listed.has(id)),
+      ];
+
+      for (const [index, id] of finalOrder.entries()) {
+        await tx.creditCard.update({
+          where: { id },
+          data: { sortOrder: index },
+          select: { id: true },
+        });
+      }
+    });
+
+    return this.prisma.creditCard.findMany({
+      where: { userId },
+      orderBy: CREDIT_CARD_ORDER_BY,
+      select: creditCardPublicSelect,
+    });
   }
 
   async update(id: string, userId: string, dto: UpdateCreditCardDto) {

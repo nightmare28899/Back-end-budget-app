@@ -196,6 +196,7 @@ model CreditCard {
   paymentDueDay        Int?
   currency             String                        @default("MXN")
   isActive             Boolean                       @default(true)
+  sortOrder            Int                           @default(0)
   userId               String
   createdAt            DateTime                      @default(now())
   updatedAt            DateTime                      @updatedAt

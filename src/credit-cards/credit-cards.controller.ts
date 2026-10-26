@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -22,6 +23,7 @@ import type { CurrentUserType } from "../common/types/current-user.type";
 import { CreditCardsService } from "./credit-cards.service";
 import { CreateCreditCardDto } from "./dto/create-credit-card.dto";
 import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
+import { ReorderCreditCardsDto } from "./dto/reorder-credit-cards.dto";
 import { QueryCreditCardsDto } from "./dto/query-credit-cards.dto";
 
 @ApiTags("Credit Cards")
@@ -56,6 +58,22 @@ export class CreditCardsController {
     @Query() query: QueryCreditCardsDto,
   ) {
     return this.creditCardsService.getOverview(user.id, query);
+  }
+
+  @Put("order")
+  @ApiOperation({
+    summary: "Set the user-defined credit card order",
+    description:
+      "Cards not listed keep their relative order after the listed ones. Returns the full ordered list.",
+  })
+  @ApiResponse({ status: 200, description: "Ordered credit card list" })
+  @ApiResponse({ status: 400, description: "Duplicate or invalid ids" })
+  @ApiResponse({ status: 404, description: "Credit card not found" })
+  async reorder(
+    @CurrentUser() user: CurrentUserType,
+    @Body() dto: ReorderCreditCardsDto,
+  ) {
+    return this.creditCardsService.reorder(user.id, dto.ids);
   }
 
   @Get(":id")
