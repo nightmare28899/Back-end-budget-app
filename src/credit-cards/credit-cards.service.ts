@@ -21,6 +21,7 @@ import { creditCardPublicSelect } from "./credit-card.select";
 import { isCreditCardPaymentMethod } from "../common/payments/payment-method.utils";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
 import { formatDateOnly } from "../common/budget/budget.utils";
+import { planMatchesExpense } from "../expenses/financing-plan-matcher";
 import {
   calculateStatementPaymentSummary,
   type StatementPaymentSummary,
@@ -104,6 +105,10 @@ type UnbilledExpenseRow = {
   currency: string;
   date: Date;
   isInstallment: boolean;
+  title: string;
+  merchantName: string | null;
+  installmentCount: number | null;
+  installmentTotalAmount: number | null;
 };
 
 @Injectable()
@@ -331,6 +336,10 @@ export class CreditCardsService {
           currency: true,
           date: true,
           isInstallment: true,
+          title: true,
+          merchantName: true,
+          installmentCount: true,
+          installmentTotalAmount: true,
         },
       }),
     ]);
@@ -393,6 +402,13 @@ export class CreditCardsService {
         currency: expense.currency,
         date: expense.date,
         isInstallment: expense.isInstallment === true,
+        title: expense.title ?? "",
+        merchantName: expense.merchantName ?? null,
+        installmentCount: expense.installmentCount ?? null,
+        installmentTotalAmount:
+          expense.installmentTotalAmount == null
+            ? null
+            : Number(expense.installmentTotalAmount),
       }),
     );
 
@@ -439,6 +455,12 @@ export class CreditCardsService {
       const statementPeriodEnd = latestStatement?.periodEnd
         ? this.utcDayEnd(latestStatement.periodEnd)
         : null;
+      // Regular spend dated on the cutoff day itself is not in the statement
+      // when it has no statement row (the import cannot contain later rows),
+      // so it is post-close debt. Installment rows keep the strict boundary.
+      const statementCutoffDayStart = latestStatement?.periodEnd
+        ? this.utcDayStart(latestStatement.periodEnd)
+        : null;
       const cardUnbilledExpenses = unbilledExpenses.filter(
         (expense) =>
           expense.creditCardId === card.id &&
@@ -446,7 +468,20 @@ export class CreditCardsService {
           // committed debt even when their payment date is in the future.
           (expense.isInstallment || expense.date.getTime() <= now.getTime()) &&
           (!statementPeriodEnd ||
-            expense.date.getTime() > statementPeriodEnd.getTime()),
+            expense.date.getTime() > statementPeriodEnd.getTime() ||
+            (!expense.isInstallment &&
+              statementCutoffDayStart !== null &&
+              expense.date.getTime() >= statementCutoffDayStart.getTime())) &&
+          // Remaining balance of a plan already in the statement is counted
+          // through deferredInstallmentBalance; its cuota rows must not
+          // be added a second time.
+          !(
+            expense.isInstallment &&
+            this.isCoveredByFinancingPlan(
+              expense,
+              latestStatement?.financingPlans ?? [],
+            )
+          ),
       );
       const matchingUnbilledExpenses = cardUnbilledExpenses.filter(
         (expense) => expense.currency === card.currency,
@@ -1067,6 +1102,50 @@ export class CreditCardsService {
         59,
         999,
       ),
+    );
+  }
+
+  private utcDayStart(value: Date) {
+    const start = new Date(value);
+    start.setUTCHours(0, 0, 0, 0);
+    return start;
+  }
+
+  // Reuses the statement/expense financing-plan matcher on the purchase total
+  // (not the cuota), ignoring purchase date: cuota rows are dated months apart.
+  private isCoveredByFinancingPlan(
+    expense: UnbilledExpenseRow,
+    plans: ConfirmedStatementRow["financingPlans"],
+  ) {
+    if (expense.installmentTotalAmount == null) return false;
+    return plans.some(
+      (plan) =>
+        plan.currency === expense.currency &&
+        (plan.installmentCount == null ||
+          expense.installmentCount == null ||
+          plan.installmentCount === expense.installmentCount) &&
+        planMatchesExpense(
+          {
+            type: plan.type,
+            merchantName: plan.merchantName,
+            purchaseDate: null,
+            originalAmount: plan.originalAmount,
+            installmentAmount: plan.installmentAmount,
+            installmentNumber: plan.installmentNumber,
+            installmentCount: plan.installmentCount,
+            remainingAmount: plan.remainingAmount,
+            creditCardId: null,
+            statementPeriodEnd: null,
+            statementCreatedAt: null,
+          },
+          {
+            cost: expense.installmentTotalAmount,
+            date: expense.date,
+            paymentMethod: PaymentMethod.CREDIT_CARD,
+            merchantName: expense.merchantName,
+            title: expense.title,
+          },
+        ),
     );
   }
 

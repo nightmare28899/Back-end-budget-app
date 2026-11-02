@@ -309,14 +309,14 @@ describe("CreditCardsService", () => {
     });
   });
 
-  it("uses a strict UTC day-end boundary for post-close spend", async () => {
+  it("keeps spend dated before the cutoff day out of post-close spend", async () => {
     statementImportFindMany.mockResolvedValue([
       statement({ closingBalance: 300, periodEnd: "2026-03-31" }),
     ]);
     mockExpenseQueries(
       [],
       [
-        expense({ cost: 50, date: "2026-03-31T23:59:59.999Z" }),
+        expense({ cost: 50, date: "2026-03-30T23:59:59.999Z" }),
         expense({ cost: 75, date: "2026-04-01T00:00:00.000Z" }),
       ],
     );
@@ -327,6 +327,44 @@ describe("CreditCardsService", () => {
       postCloseSpend: 75,
       postCloseExpenseCount: 1,
     });
+  });
+
+  it("counts unmatched non-installment spend dated on the cutoff day", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 300, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [
+        expense({ id: "a", cost: 50, date: "2026-03-31T00:00:00.000Z" }),
+        expense({ id: "b", cost: 25, date: "2026-03-31T23:59:59.999Z" }),
+        expense({ id: "c", cost: 10, date: "2026-03-30T23:59:59.999Z" }),
+      ],
+    );
+
+    const summary = (await service.getOverview("user-1", {})).cards[0]
+      .statementSummary;
+
+    expect(summary).toMatchObject({
+      postCloseSpend: 75,
+      postCloseExpenseCount: 2,
+      projectedTotalDebt: 375,
+    });
+  });
+
+  it("does not pull installment rows of the cutoff day into post-close debt", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 0, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [installmentExpense({ cost: 100, date: "2026-03-31T00:00:00.000Z" })],
+    );
+
+    const summary = (await service.getOverview("user-1", {})).cards[0]
+      .statementSummary;
+
+    expect(summary.projectedTotalDebt).toBe(0);
   });
 
   it("excludes future-dated unlinked spend from projections", async () => {
@@ -1131,12 +1169,168 @@ describe("CreditCardsService", () => {
     });
   });
 
+  describe("installment groups already in the statement", () => {
+    const amazonPlan = {
+      merchantName: "AMAZON MEXICO",
+      originalAmount: 728,
+      installmentNumber: 1,
+      installmentCount: 3,
+      remainingAmount: 500.62,
+      installmentAmount: 242.66,
+    };
+    const group = (
+      groupId: string,
+      title: string,
+      total: number,
+      count: number,
+      dates: string[],
+    ) => {
+      const parts = splitAmountAcrossInstallments(total, count);
+      return parts.map((cost, i) =>
+        installmentExpense({
+          id: `${groupId}-${i + 1}`,
+          cost,
+          date: dates[i],
+          title,
+          installmentGroupId: groupId,
+          installmentIndex: i + 1,
+          installmentCount: count,
+          installmentTotalAmount: total,
+        }),
+      );
+    };
+
+    it("does not count future cuotas again when the plan is already in the statement", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      // Cuota 1 is matched to a statement row (so absent); 2/3 and 3/3 remain.
+      mockExpenseQueries(
+        [],
+        group("amz", "Amazon Mexico", 728, 3, [
+          "2026-03-10",
+          "2026-04-10",
+          "2026-05-10",
+        ]).slice(1),
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.deferredInstallmentBalance).toBe(500.62);
+      expect(summary.projectedTotalDebt).toBe(500.62);
+      expect(summary.postCloseSpend).toBe(0);
+      expect(summary.postCloseExpenseCount).toBe(0);
+      // Next cuota comes from the plan only, never from the expense row too.
+      expect(summary.nextPlanInstallments).toBe(242.66);
+      expect(summary.nextClosePaymentEstimate).toBe(242.66);
+    });
+
+    it("matches the group by merchantName as well as title", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [{ ...amazonPlan, merchantName: "AMAZON MEXICO MP" }],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        group("amz", "Compra", 728, 3, [
+          "2026-03-10",
+          "2026-04-10",
+          "2026-05-10",
+        ]).map((row) => ({ ...row, merchantName: "Amazon Mexico" })),
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(500.62);
+    });
+
+    it("still counts in full an installment purchase that is not in the statement", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          ...group("amz", "Amazon Mexico", 728, 3, [
+            "2026-03-10",
+            "2026-04-10",
+            "2026-05-10",
+          ]).slice(1),
+          ...group("wuzi", "Wuzipay", 940.5, 3, [
+            "2026-04-02",
+            "2026-05-02",
+            "2026-06-02",
+          ]),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.postCloseSpend).toBe(940.5);
+      expect(summary.postCloseExpenseCount).toBe(3);
+      expect(summary.projectedTotalDebt).toBe(1441.12);
+    });
+
+    it("does not match a plan with a different total or installment count", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          ...group("amz-a", "Amazon Mexico", 800, 3, [
+            "2026-04-10",
+            "2026-05-10",
+            "2026-06-10",
+          ]),
+          ...group("amz-b", "Amazon Mexico", 728, 6, [
+            "2026-04-10",
+            "2026-05-10",
+            "2026-06-10",
+            "2026-07-10",
+            "2026-08-10",
+            "2026-09-10",
+          ]),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.postCloseSpend).toBe(1528);
+    });
+  });
+
   function installmentExpense(
     overrides: Partial<{
       id: string;
       cost: number;
       currency: string;
       date: string;
+      title: string;
+      merchantName: string | null;
+      installmentGroupId: string | null;
+      installmentIndex: number | null;
+      installmentCount: number | null;
+      installmentTotalAmount: number | null;
     }> = {},
   ) {
     return expense({
@@ -1190,9 +1384,21 @@ describe("CreditCardsService", () => {
       currency: string;
       date: string;
       isInstallment: boolean;
+      title: string;
+      merchantName: string | null;
+      installmentGroupId: string | null;
+      installmentIndex: number | null;
+      installmentCount: number | null;
+      installmentTotalAmount: number | null;
     }> = {},
   ) {
     return {
+      title: overrides.title ?? "Expense",
+      merchantName: overrides.merchantName ?? null,
+      installmentGroupId: overrides.installmentGroupId ?? null,
+      installmentIndex: overrides.installmentIndex ?? null,
+      installmentCount: overrides.installmentCount ?? null,
+      installmentTotalAmount: overrides.installmentTotalAmount ?? null,
       id: overrides.id ?? "expense-1",
       creditCardId: overrides.creditCardId ?? "card-1",
       cost: overrides.cost ?? 100,
