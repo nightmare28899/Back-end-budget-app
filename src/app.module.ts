@@ -21,6 +21,7 @@ import { IncomesModule } from "./incomes/incomes.module";
 import { LegalModule } from "./legal/legal.module";
 import { CardStatementsModule } from "./card-statements/card-statements.module";
 import { NutritionModule } from "./nutrition/nutrition.module";
+import { DetectedPurchasesModule } from "./detected-purchases/detected-purchases.module";
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { NutritionModule } from "./nutrition/nutrition.module";
     LegalModule,
     CardStatementsModule,
     NutritionModule,
+    DetectedPurchasesModule,
   ],
   providers: [
     {
