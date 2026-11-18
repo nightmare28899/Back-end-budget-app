@@ -1,4 +1,3 @@
-import { DetectedPurchasesModule } from "./detected-purchases/detected-purchases.module";
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
@@ -19,6 +18,7 @@ import { IntakeModule } from "./intake/intake.module";
 import { CreditCardsModule } from "./credit-cards/credit-cards.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { IncomesModule } from "./incomes/incomes.module";
+import { LegalModule } from "./legal/legal.module";
 import { CardStatementsModule } from "./card-statements/card-statements.module";
 import { NutritionModule } from "./nutrition/nutrition.module";
 
@@ -41,7 +41,6 @@ import { NutritionModule } from "./nutrition/nutrition.module";
     UsersModule,
     CategoriesModule,
     ExpensesModule,
-    DetectedPurchasesModule,
     AnalyticsModule,
     ReportsModule,
     NotificationsModule,
@@ -51,6 +50,7 @@ import { NutritionModule } from "./nutrition/nutrition.module";
     HistoryModule,
     SavingsModule,
     IntakeModule,
+    LegalModule,
     CardStatementsModule,
     NutritionModule,
   ],

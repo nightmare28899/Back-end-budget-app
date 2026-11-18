@@ -34,6 +34,21 @@ enum DevicePlatform {
   IOS
 }
 
+enum EntitlementStore {
+  APPLE
+  GOOGLE
+  ADMIN
+}
+
+enum EntitlementStatus {
+  ACTIVE
+  GRACE_PERIOD
+  BILLING_RETRY
+  CANCELED
+  EXPIRED
+  REFUNDED
+}
+
 enum StatementImportStatus {
   UPLOADED
   PARSED
@@ -112,42 +127,62 @@ enum StatementPaymentSource {
 }
 
 model User {
-  id                   String             @id @default(uuid())
-  email                String             @unique
-  password             String
-  name                 String
-  role                 String             @default("user")
-  avatarUrl            String?
-  dailyBudget          Decimal            @default(0) @db.Decimal(10, 2)
-  budgetAmount         Decimal            @default(0) @db.Decimal(10, 2)
-  budgetPeriod         String             @default("daily")
-  budgetPeriodStart    DateTime?
-  budgetPeriodEnd      DateTime?
-  currency             String             @default("MXN")
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-  isActive             Boolean            @default(true)
-  isPremium            Boolean            @default(false)
-  weeklyReportEnabled  Boolean            @default(true) @map("weekly_report_enabled")
-  monthlyReportEnabled Boolean            @default(false) @map("monthly_report_enabled")
-  termsAcceptedAt      DateTime?          @map("terms_accepted_at")
-  termsVersion         String?            @map("terms_version")
-  deletedAt            DateTime?          @map("deleted_at")
-  categories           Category[]
-  creditCards          CreditCard[]
-  detectedPurchases    DetectedPurchase[]
-  expenses             Expense[]
-  incomes              Income[]
-  subscriptions        Subscription[]
-  savingsGoals         SavingsGoal[]
-  deviceTokens         DeviceToken[]
-  authSessions         AuthSession[]
-  reportHistory        ReportHistory[]
-  statementImports     StatementImport[]
-  statementPayments    StatementPayment[]
-  nutritionUser        NutritionUser?
+  id                      String                   @id @default(uuid())
+  email                   String                   @unique
+  password                String
+  name                    String
+  role                    String                   @default("user")
+  avatarUrl               String?
+  dailyBudget             Decimal                  @default(0) @db.Decimal(10, 2)
+  budgetAmount            Decimal                  @default(0) @db.Decimal(10, 2)
+  budgetPeriod            String                   @default("daily")
+  budgetPeriodStart       DateTime?
+  budgetPeriodEnd         DateTime?
+  currency                String                   @default("MXN")
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  isActive                Boolean                  @default(true)
+  isPremium               Boolean                  @default(false)
+  weeklyReportEnabled     Boolean                  @default(true) @map("weekly_report_enabled")
+  monthlyReportEnabled    Boolean                  @default(false) @map("monthly_report_enabled")
+  termsAcceptedAt         DateTime?                @map("terms_accepted_at")
+  termsVersion            String?                  @map("terms_version")
+  deletedAt               DateTime?                @map("deleted_at")
+  entitlementTier         String                   @default("free") @map("entitlement_tier")
+  entitlementExpiresAt    DateTime?                @map("entitlement_expires_at")
+  entitlementStore        EntitlementStore?        @map("entitlement_store")
+  originalTransactionId   String?                  @map("original_transaction_id")
+  entitlementStatus       EntitlementStatus        @default(EXPIRED) @map("entitlement_status")
+  accountDeletionRequests AccountDeletionRequest[]
+  categories              Category[]
+  creditCards             CreditCard[]
+  detectedPurchases       DetectedPurchase[]
+  expenses                Expense[]
+  incomes                 Income[]
+  subscriptions           Subscription[]
+  savingsGoals            SavingsGoal[]
+  deviceTokens            DeviceToken[]
+  authSessions            AuthSession[]
+  reportHistory           ReportHistory[]
+  statementImports        StatementImport[]
+  statementPayments       StatementPayment[]
+  nutritionUser           NutritionUser?
 
   @@map("users")
+}
+
+model AccountDeletionRequest {
+  id        String   @id @default(uuid())
+  email     String
+  reason    String?
+  status    String   @default("requested")
+  createdAt DateTime @default(now()) @map("created_at")
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([status, createdAt])
+  @@map("account_deletion_requests")
 }
 
 model AuthSession {
@@ -840,7 +875,6 @@ model NutritionDietOriginalFile {
   @@map("nutrition_diet_original_files")
 }
 
-
 enum DetectedPurchaseStatus {
   PENDING
   CONFIRMED
@@ -854,23 +888,23 @@ enum DetectedPurchaseConfidence {
 }
 
 model DetectedPurchase {
-  id String @id @default(uuid())
-  userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fingerprint String @db.VarChar(256)
-  sourcePackage String @db.VarChar(255)
-  amountCents BigInt
-  currency String @db.VarChar(3)
-  merchant String? @db.VarChar(120)
-  occurredAtMillis BigInt
-  confidence DetectedPurchaseConfidence
-  possibleDuplicateOf String? @db.VarChar(256)
-  mayBeRegistered Boolean @default(false)
-  status DetectedPurchaseStatus @default(PENDING)
-  expenseId String?
-  statementPaymentId String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String                     @id @default(uuid())
+  userId              String
+  user                User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint         String                     @db.VarChar(256)
+  sourcePackage       String                     @db.VarChar(255)
+  amountCents         BigInt
+  currency            String                     @db.VarChar(3)
+  merchant            String?                    @db.VarChar(120)
+  occurredAtMillis    BigInt
+  confidence          DetectedPurchaseConfidence
+  possibleDuplicateOf String?                    @db.VarChar(256)
+  mayBeRegistered     Boolean                    @default(false)
+  status              DetectedPurchaseStatus     @default(PENDING)
+  expenseId           String?
+  statementPaymentId  String?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
 
   @@unique([userId, fingerprint])
   @@index([userId, status, occurredAtMillis])
