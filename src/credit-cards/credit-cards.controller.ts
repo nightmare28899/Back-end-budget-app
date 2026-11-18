@@ -7,16 +7,23 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { CurrentUserType } from "../common/types/current-user.type";
 import { CreditCardsService } from "./credit-cards.service";
 import { CreateCreditCardDto } from "./dto/create-credit-card.dto";
 import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
+import { ReorderCreditCardsDto } from "./dto/reorder-credit-cards.dto";
 import { QueryCreditCardsDto } from "./dto/query-credit-cards.dto";
 
 @ApiTags("Credit Cards")
@@ -53,6 +60,22 @@ export class CreditCardsController {
     return this.creditCardsService.getOverview(user.id, query);
   }
 
+  @Put("order")
+  @ApiOperation({
+    summary: "Set the user-defined credit card order",
+    description:
+      "Cards not listed keep their relative order after the listed ones. Returns the full ordered list.",
+  })
+  @ApiResponse({ status: 200, description: "Ordered credit card list" })
+  @ApiResponse({ status: 400, description: "Duplicate or invalid ids" })
+  @ApiResponse({ status: 404, description: "Credit card not found" })
+  async reorder(
+    @CurrentUser() user: CurrentUserType,
+    @Body() dto: ReorderCreditCardsDto,
+  ) {
+    return this.creditCardsService.reorder(user.id, dto.ids);
+  }
+
   @Get(":id")
   @ApiOperation({ summary: "Get one credit card catalog entry" })
   async findOne(
@@ -79,5 +102,24 @@ export class CreditCardsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.creditCardsService.deactivate(id, user.id);
+  }
+
+  @Delete(":id/permanent")
+  @ApiOperation({
+    summary: "Permanently delete a credit card catalog entry",
+    description:
+      "Linked expenses and subscriptions are unlinked (creditCardId set to null). Returns 409 CREDIT_CARD_HAS_STATEMENTS when statements reference the card.",
+  })
+  @ApiResponse({ status: 200, description: "Credit card deleted" })
+  @ApiResponse({ status: 404, description: "Credit card not found" })
+  @ApiResponse({
+    status: 409,
+    description: "Credit card has statements (CREDIT_CARD_HAS_STATEMENTS)",
+  })
+  async deletePermanently(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.creditCardsService.deletePermanently(id, user.id);
   }
 }

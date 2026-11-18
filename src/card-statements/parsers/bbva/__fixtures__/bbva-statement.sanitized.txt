@@ -1,0 +1,45 @@
+BBVA MEXICO, S.A., INSTITUCION DE BANCA MULTIPLE
+TARJETA BBVA (CLASICA)
+Numero de tarjeta: XXXXXXXXXXXX7289
+TU PAGO REQUERIDO ESTE PERIODO
+Periodo: 15-jul-2026 al 14-ago-2026
+Fecha de corte: 14-ago-2026
+Fecha limite de pago:1 jueves, 03-sep-2026
+Pago para no generar intereses:2 $13,310.66
+Pago minimo + compras y cargo diferidos a meses:3 $4,848.68
+Pago minimo:4 $1,255.00
+RESUMEN DE CARGOS Y ABONOS DEL PERIODO
+Adeudo del periodo anterior $12,199.06
+Cargos regulares (no a meses) + $8,977.74
+Cargos compras a meses (capital)7 + $3,593.68
+Monto de intereses8 + $436.20
+Monto de comisiones + $200.48
+IVA de intereses y comisiones + $102.56
+Pagos y abonos - $12,199.06
+=== PAGE 2 ===
+DESGLOSE DE MOVIMIENTOS
+=== PAGE 3 ===
+COMPRAS Y CARGOS DIFERIDOS A MESES SIN INTERESES Tarjeta titular: XXXXXXXXXXXX7289
+Fecha de la operacion Descripcion Monto original Saldo pendiente Pago requerido Num. de pago Tasa de interes aplicable
+27-may-2025 MERCADO PAGO ; Tarjeta Digital ***7931 $6,884.10 $1,139.10 $383.00 15 de 18 0.00%
+18-nov-2025 AMAZON A MESES ; Tarjeta Digital ***7931 $3,999.00 $1,596.00 $267.00 9 de 15 0.00%
+CARGOS,COMPRAS Y ABONOS REGULARES(NO A MESES) Tarjeta titular: XXXXXXXXXXXX7289
+Fecha de la operacion Fecha de cargo Descripcion del movimiento Monto
+18-jul-2026 20-jul-2026 BMOVIL.PAGO TDC - $4,384.00
+29-jul-2026 30-jul-2026 CAFE EUROPA + $119.00
+04-ago-2026 04-ago-2026 ABONO FINANC. COMPRAS 00MSI - $2,864.00
+04-ago-2026 04-ago-2026 ALTA PARA MESES S/INTERESES + $2,864.00
+05-ago-2026 05-ago-2026 BMOVIL.PAGO TDC - $4,582.06
+16-jul-2026 17-jul-2026 PP*ITUNESAPPST APPLE.C ; Tarjeta Digital ***7931 + $49.00
+=== PAGE 4 ===
+CARGOS,COMPRAS Y ABONOS REGULARES(NO A MESES) Tarjeta titular: XXXXXXXXXXXX7289
+23-jul-2026 24-jul-2026 OPENAI *CHATGPT SUBSCR ; Tarjeta Digital ***7931 + $399.00
+USD $22.95 TIPO DE CAMBIO $17.39
+22-jul-2026 30-jul-2026 TOTAL PASS SAPI DE CV ; Tarjeta Digital ***7931 - $369.00
+14-ago-2026 17-ago-2026 15 DE 18 MERCADO PAGO ; Tarjeta Digital ***7931 + $383.00
+TOTAL CARGOS $15,435.42
+TOTAL ABONOS -$12,199.06
+=== PAGE 5 ===
+NOTAS ACLARATORIAS
+=== PAGE 7 ===
+Este documento es una representacion impresa de un CFDI.

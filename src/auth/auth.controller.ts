@@ -69,7 +69,11 @@ export class AuthController {
 
   @Post("google")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Login or register with Google via Firebase" })
+  @ApiOperation({
+    summary: "Login or register with Google via Firebase",
+    description:
+      "Set existingUserOnly to reject authenticated Google identities that do not already have an account.",
+  })
   @ApiResponse({ status: 200, description: "Google authentication successful" })
   @ApiResponse({ status: 401, description: "Invalid Google credentials" })
   @ApiResponse({

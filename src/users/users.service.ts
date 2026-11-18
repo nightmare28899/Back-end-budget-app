@@ -206,40 +206,78 @@ export class UsersService {
     });
   }
 
-  /**
-   * Permanently deletes the authenticated user's account.
-   *
-   * All user-owned database records have ON DELETE CASCADE relations. The
-   * avatar lives outside the database, so it is removed separately after the
-   * transaction. Storage cleanup is best-effort: an orphaned object must not
-   * prevent the account and its financial data from being deleted.
-   */
-  async deleteAccount(userId: string) {
-    const user = await this.prisma.user.findUnique({
+  async deletePermanently(userId: string, currentUser: CurrentUserType) {
+    if (currentUser.id !== userId) {
+      throw new ForbiddenException(
+        "You can only permanently delete your own account",
+      );
+    }
+
+    const existingUser = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, avatarUrl: true },
+      select: {
+        id: true,
+        avatarUrl: true,
+        expenses: { select: { imageUrl: true } },
+        savingsGoals: { select: { id: true } },
+        // Nutrition rows cascade from users; their stored originals do not.
+        nutritionUser: {
+          select: { originalFiles: { select: { path: true } } },
+        },
+      },
     });
 
-    if (!user) {
+    if (!existingUser) {
       throw new NotFoundException("User not found");
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.delete({ where: { id: userId } });
-    });
+    const storedFiles = [
+      existingUser.avatarUrl,
+      ...existingUser.expenses.map((expense) => expense.imageUrl),
+      ...(existingUser.nutritionUser?.originalFiles ?? []).map(
+        (file) => file.path,
+      ),
+    ].filter((value): value is string => Boolean(value));
 
-    if (user.avatarUrl) {
+    for (const objectName of new Set(storedFiles)) {
       try {
-        await this.storageService.deleteFile(user.avatarUrl);
+        await this.storageService.deleteFile(objectName);
       } catch (error) {
-        this.logger.error(
-          `[privacy] account deleted but avatar cleanup failed userId=${userId} avatarKey=${user.avatarUrl}`,
-          error instanceof Error ? error.stack : undefined,
+        this.logger.warn(
+          `Could not delete stored user file before account deletion: ${objectName}`,
         );
+        console.error(error);
       }
     }
 
-    this.logger.log(`[privacy] permanently deleted account userId=${userId}`);
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.authSession.deleteMany({ where: { userId } });
+      await transaction.deviceToken.deleteMany({ where: { userId } });
+      await transaction.reportHistory.deleteMany({ where: { userId } });
+      await transaction.expense.deleteMany({ where: { userId } });
+      await transaction.income.deleteMany({ where: { userId } });
+      await transaction.subscription.deleteMany({ where: { userId } });
+      // The payment ledger uses RESTRICT FKs to users, statement_imports and
+      // itself (supersedesId), so it must go first. Statement imports cascade
+      // to their rows; expenses (which reference rows) are already deleted.
+      await transaction.statementPayment.updateMany({
+        where: { userId, supersedesId: { not: null } },
+        data: { supersedesId: null },
+      });
+      await transaction.statementPayment.deleteMany({ where: { userId } });
+      await transaction.statementImport.deleteMany({ where: { userId } });
+      await transaction.creditCard.deleteMany({ where: { userId } });
+      await transaction.category.deleteMany({ where: { userId } });
+      await transaction.savingsTransaction.deleteMany({
+        where: {
+          goalId: { in: existingUser.savingsGoals.map((goal) => goal.id) },
+        },
+      });
+      await transaction.savingsGoal.deleteMany({ where: { userId } });
+      await transaction.user.delete({ where: { id: userId } });
+    });
+
+    this.logger.log(`[security] users.deletePermanently userId=${userId}`);
   }
 
   private async updateUser(

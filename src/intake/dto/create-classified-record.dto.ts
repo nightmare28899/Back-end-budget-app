@@ -79,7 +79,8 @@ export class CreateClassifiedRecordDto {
   isTaxable: boolean;
 
   @ApiProperty({
-    example: "Monthly Netflix subscription for household entertainment plan renewal.",
+    example:
+      "Monthly Netflix subscription for household entertainment plan renewal.",
   })
   @Transform(({ value }) => trimStringValue(value as unknown))
   @IsString()

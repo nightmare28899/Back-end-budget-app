@@ -16,8 +16,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
-    let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+    let statusCode: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = "Internal server error";
+    const metadata: { code?: string; feature?: string } = {};
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -39,6 +40,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       } else {
         message = exception.message;
       }
+
+      if (exceptionResponse && typeof exceptionResponse === "object") {
+        const exceptionMetadata = exceptionResponse as Record<string, unknown>;
+
+        if (typeof exceptionMetadata.code === "string") {
+          metadata.code = exceptionMetadata.code;
+        }
+
+        if (typeof exceptionMetadata.feature === "string") {
+          metadata.feature = exceptionMetadata.feature;
+        }
+      }
     } else if (exception instanceof Error) {
       this.logger.error(exception.message, exception.stack);
     } else {
@@ -48,6 +61,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     response.status(statusCode).json({
       statusCode,
       message,
+      ...metadata,
     });
   }
 }

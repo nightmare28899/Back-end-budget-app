@@ -1,9 +1,5 @@
 import { Body, Controller, Post, UseGuards } from "@nestjs/common";
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -21,7 +17,9 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Post("device-tokens")
-  @ApiOperation({ summary: "Register or refresh the current device push token" })
+  @ApiOperation({
+    summary: "Register or refresh the current device push token",
+  })
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async registerDeviceToken(
     @CurrentUser() user: CurrentUserType,
@@ -41,7 +39,9 @@ export class NotificationsController {
   }
 
   @Post("test-push")
-  @ApiOperation({ summary: "Send a test push notification to a user's devices" })
+  @ApiOperation({
+    summary: "Send a test push notification to a user's devices",
+  })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async sendTestPush(
     @CurrentUser() user: CurrentUserType,

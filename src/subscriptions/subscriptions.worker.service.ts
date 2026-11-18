@@ -91,6 +91,8 @@ export class SubscriptionsWorkerService {
       select: {
         id: true,
         userId: true,
+        isActive: true,
+        updatedAt: true,
         name: true,
         cost: true,
         currency: true,
@@ -120,7 +122,31 @@ export class SubscriptionsWorkerService {
         subscription.billingCycle,
       );
 
-      await this.prisma.$transaction(async (tx) => {
+      const processed = await this.prisma.$transaction(async (tx) => {
+        // Claim this unchanged snapshot before creating expenses. Both writes
+        // roll back together if expense insertion fails.
+        const claim = await tx.subscription.updateMany({
+          where: {
+            id: subscription.id,
+            userId: subscription.userId,
+            isActive: true,
+            updatedAt: subscription.updatedAt,
+            nextPaymentDate: subscription.nextPaymentDate,
+            name: subscription.name,
+            cost: subscription.cost,
+            currency: subscription.currency,
+            paymentMethod: subscription.paymentMethod,
+            creditCardId: subscription.creditCardId,
+            categoryId: subscription.categoryId,
+            billingCycle: subscription.billingCycle,
+          },
+          data: { nextPaymentDate },
+        });
+
+        if (claim.count !== 1) {
+          return false;
+        }
+
         await tx.expense.createMany({
           data: dueDates.map((dueDate) => ({
             userId: subscription.userId,
@@ -137,11 +163,12 @@ export class SubscriptionsWorkerService {
           })),
         });
 
-        await tx.subscription.update({
-          where: { id: subscription.id },
-          data: { nextPaymentDate },
-        });
+        return true;
       });
+
+      if (!processed) {
+        continue;
+      }
 
       results.push({
         subscriptionId: subscription.id,
@@ -208,7 +235,10 @@ export class SubscriptionsWorkerService {
     subscription: SubscriptionReminderCandidate,
     now = new Date(),
   ): Promise<SubscriptionReminderResultItem | null> {
-    const daysRemaining = this.getDaysRemaining(now, subscription.nextPaymentDate);
+    const daysRemaining = this.getDaysRemaining(
+      now,
+      subscription.nextPaymentDate,
+    );
     if (daysRemaining < 0 || daysRemaining > subscription.reminderDays) {
       return null;
     }
@@ -222,8 +252,8 @@ export class SubscriptionsWorkerService {
     }
 
     try {
-      const pushResult = await this.notificationsService.sendSubscriptionReminder(
-        {
+      const pushResult =
+        await this.notificationsService.sendSubscriptionReminder({
           id: subscription.id,
           userId: subscription.userId,
           name: subscription.name,
@@ -231,8 +261,7 @@ export class SubscriptionsWorkerService {
           currency: subscription.currency,
           nextPaymentDate: subscription.nextPaymentDate,
           daysRemaining,
-        },
-      );
+        });
 
       if (pushResult.successCount <= 0) {
         return null;

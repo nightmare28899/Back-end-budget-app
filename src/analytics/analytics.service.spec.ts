@@ -50,12 +50,18 @@ describe("AnalyticsService", () => {
   };
 
   const expenseFindMany = jest.fn<Promise<ExpenseRow[]>, [ExpenseWhere]>();
+  const expenseGroupBy = jest.fn();
+  const creditCardFindMany = jest.fn();
   const subscriptionFindMany = jest.fn<Promise<SubscriptionRow[]>, [unknown]>();
   const categoryFindMany = jest.fn<Promise<CategoryRow[]>, [unknown]>();
   const userFindUnique = jest.fn<Promise<UserBudgetRow | null>, [unknown]>();
   const prisma = {
     expense: {
       findMany: expenseFindMany,
+      groupBy: expenseGroupBy,
+    },
+    creditCard: {
+      findMany: creditCardFindMany,
     },
     subscription: {
       findMany: subscriptionFindMany,
@@ -74,9 +80,13 @@ describe("AnalyticsService", () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date(2026, 3, 7, 10, 0, 0, 0));
     expenseFindMany.mockReset();
+    expenseGroupBy.mockReset();
+    creditCardFindMany.mockReset();
     subscriptionFindMany.mockReset();
     categoryFindMany.mockReset();
     userFindUnique.mockReset();
+    expenseGroupBy.mockResolvedValue([]);
+    creditCardFindMany.mockResolvedValue([]);
     service = new AnalyticsService(prisma as never);
   });
 
@@ -106,6 +116,128 @@ describe("AnalyticsService", () => {
     await expect(
       service.getDailyTotals("user-1", 7, "2026-04-08"),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("aggregates owned card, no-card, inactive, and multi-currency expenses without fetching rows", async () => {
+    jest.setSystemTime(new Date("2026-04-07T10:00:00.000Z"));
+    expenseGroupBy.mockResolvedValue([
+      {
+        creditCardId: "card-inactive",
+        currency: "MXN",
+        _count: { _all: 2 },
+        _sum: { cost: 300.25 },
+      },
+      {
+        creditCardId: "card-inactive",
+        currency: "USD",
+        _count: { _all: 1 },
+        _sum: { cost: 10 },
+      },
+      {
+        creditCardId: null,
+        currency: "MXN",
+        _count: { _all: 3 },
+        _sum: { cost: 125.5 },
+      },
+    ]);
+    creditCardFindMany.mockResolvedValue([
+      {
+        id: "card-inactive",
+        name: "Archived card",
+        bank: "Bank",
+        brand: "Visa",
+        last4: "1234",
+      },
+    ]);
+
+    const result = await service.getCardExpenseBreakdown(
+      "user-1",
+      "2026-04-01",
+      "2026-04-30",
+    );
+
+    expect(expenseGroupBy).toHaveBeenCalledWith({
+      by: ["creditCardId", "currency"],
+      where: {
+        userId: "user-1",
+        date: {
+          gte: new Date("2026-04-01T00:00:00.000Z"),
+          lte: new Date("2026-04-07T10:00:00.000Z"),
+        },
+      },
+      _count: { _all: true },
+      _sum: { cost: true },
+    });
+    expect(creditCardFindMany).toHaveBeenCalledWith({
+      where: { userId: "user-1", id: { in: ["card-inactive"] } },
+      select: {
+        id: true,
+        name: true,
+        bank: true,
+        brand: true,
+        last4: true,
+      },
+    });
+    expect(expenseFindMany).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      from: "2026-04-01",
+      to: "2026-04-30",
+      totalCount: 6,
+      currencyBreakdown: [
+        { currency: "MXN", total: 425.75 },
+        { currency: "USD", total: 10 },
+      ],
+      groups: [
+        {
+          creditCardId: "card-inactive",
+          card: {
+            id: "card-inactive",
+            name: "Archived card",
+            bank: "Bank",
+            brand: "Visa",
+            last4: "1234",
+          },
+          expenseCount: 3,
+          totalsByCurrency: [
+            { currency: "MXN", total: 300.25 },
+            { currency: "USD", total: 10 },
+          ],
+        },
+        {
+          creditCardId: null,
+          card: null,
+          expenseCount: 3,
+          totalsByCurrency: [{ currency: "MXN", total: 125.5 }],
+        },
+      ],
+    });
+  });
+
+  it("does not expose a card ID when ownership-scoped metadata is unavailable", async () => {
+    expenseGroupBy.mockResolvedValue([
+      {
+        creditCardId: "foreign-card",
+        currency: "MXN",
+        _count: { _all: 1 },
+        _sum: { cost: 50 },
+      },
+    ]);
+    creditCardFindMany.mockResolvedValue([]);
+
+    const result = await service.getCardExpenseBreakdown(
+      "user-1",
+      "2026-04-01",
+      "2026-04-02",
+    );
+
+    expect(result.groups).toEqual([
+      {
+        creditCardId: null,
+        card: null,
+        expenseCount: 1,
+        totalsByCurrency: [{ currency: "MXN", total: 50 }],
+      },
+    ]);
   });
 
   it("builds actionable insights for weekly, monthly, and subscription savings", async () => {

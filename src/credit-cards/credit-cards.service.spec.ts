@@ -1,223 +1,1505 @@
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from "@nestjs/common";
 import { CreditCardsService } from "./credit-cards.service";
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
+import { CreateCreditCardDto } from "./dto/create-credit-card.dto";
+import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
+import { splitAmountAcrossInstallments } from "../expenses/installments/expense-installments.util";
 
 describe("CreditCardsService", () => {
-  type CreditCardRow = {
-    id: string;
-    name: string;
-    bank: string;
-    brand: string;
-    last4: string;
-    color: string | null;
-    creditLimit: number | null;
-    closingDay: number | null;
-    paymentDueDay: number | null;
-    isActive: boolean;
-    createdAt: Date;
-    updatedAt: Date;
-  };
-
-  type ExpenseRow = {
-    creditCardId: string | null;
-    cost: number;
-    date: Date;
-  };
-
-  type SubscriptionRow = {
-    id: string;
-    creditCardId: string | null;
-    cost: number;
-    currency: string;
-    billingCycle: "MONTHLY" | "YEARLY" | "WEEKLY" | "DAILY";
-    nextPaymentDate: Date;
-    isActive: boolean;
-  };
-
-  type ExpenseQueryCall = {
-    where: {
-      userId: string;
-      date: {
-        gte: Date;
-        lte: Date;
-      };
-    };
-  };
-
-  const creditCardFindMany = jest.fn<Promise<CreditCardRow[]>, [unknown]>();
-  const expenseFindMany = jest.fn<Promise<ExpenseRow[]>, [ExpenseQueryCall]>();
-  const subscriptionFindMany = jest.fn<Promise<SubscriptionRow[]>, [unknown]>();
+  const creditCardFindMany = jest.fn();
+  const expenseFindMany = jest.fn();
+  const subscriptionFindMany = jest.fn();
+  const statementImportFindMany = jest.fn();
   const entitlementsService = {
     assertPremium: jest.fn().mockResolvedValue(undefined),
   };
+  const creditCardFindFirst = jest.fn();
+  const creditCardDelete = jest.fn();
+  const creditCardAggregate = jest.fn();
+  const creditCardCreate = jest.fn();
+  const creditCardUpdate = jest.fn();
+  const expenseCount = jest.fn();
+  const subscriptionCount = jest.fn();
+  const statementImportCount = jest.fn();
   const prisma = {
     creditCard: {
       findMany: creditCardFindMany,
+      findFirst: creditCardFindFirst,
+      delete: creditCardDelete,
+      aggregate: creditCardAggregate,
+      create: creditCardCreate,
+      update: creditCardUpdate,
     },
-    expense: {
-      findMany: expenseFindMany,
+    expense: { findMany: expenseFindMany, count: expenseCount },
+    subscription: { findMany: subscriptionFindMany, count: subscriptionCount },
+    statementImport: {
+      findMany: statementImportFindMany,
+      count: statementImportCount,
     },
-    subscription: {
-      findMany: subscriptionFindMany,
-    },
+    $transaction: jest.fn(),
   };
+
+  type CallArgs = Array<[Record<string, unknown>]>;
+  const firstArg = (mock: jest.Mock): Record<string, unknown> =>
+    (mock.mock.calls as CallArgs)[0][0];
 
   let service: CreditCardsService;
 
   beforeEach(() => {
     jest.useFakeTimers();
-    jest.setSystemTime(new Date(2026, 3, 8, 10, 0, 0, 0));
-    creditCardFindMany.mockReset();
-    expenseFindMany.mockReset();
-    subscriptionFindMany.mockReset();
-    entitlementsService.assertPremium.mockClear();
+    jest.setSystemTime(new Date("2026-04-08T10:00:00.000Z"));
+    jest.resetAllMocks();
+    entitlementsService.assertPremium.mockResolvedValue(undefined);
+    creditCardFindMany.mockResolvedValue([card()]);
+    expenseFindMany.mockResolvedValue([]);
+    subscriptionFindMany.mockResolvedValue([]);
+    statementImportFindMany.mockResolvedValue([]);
+    prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) =>
+      fn(prisma),
+    );
     service = new CreditCardsService(
       prisma as never,
       entitlementsService as never,
     );
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
+  afterEach(() => jest.useRealTimers());
+
+  describe("create", () => {
+    const dto = {
+      name: "Rewards",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+    } as CreateCreditCardDto;
+
+    it("appends the new card after the user's highest sortOrder", async () => {
+      creditCardAggregate.mockResolvedValue({ _max: { sortOrder: 4 } });
+      creditCardCreate.mockResolvedValue({ id: "new" });
+
+      await service.create("user-1", dto);
+
+      expect(creditCardAggregate).toHaveBeenCalledWith({
+        where: { userId: "user-1" },
+        _max: { sortOrder: true },
+      });
+      expect(
+        (firstArg(creditCardCreate).data as { sortOrder: number }).sortOrder,
+      ).toBe(5);
+    });
+
+    it("starts at sortOrder 0 when the user has no cards", async () => {
+      creditCardAggregate.mockResolvedValue({ _max: { sortOrder: null } });
+      creditCardCreate.mockResolvedValue({ id: "new" });
+
+      await service.create("user-1", dto);
+
+      expect(
+        (firstArg(creditCardCreate).data as { sortOrder: number }).sortOrder,
+      ).toBe(0);
+    });
   });
 
-  it("builds an overview with cycle spend, utilization, and schedule details", async () => {
-    creditCardFindMany.mockResolvedValue([
-      {
+  describe("list ordering", () => {
+    const expectedOrder = [
+      { sortOrder: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ];
+
+    it("findAll orders by sortOrder, createdAt, id", async () => {
+      await service.findAll("user-1");
+
+      expect(firstArg(creditCardFindMany).orderBy).toEqual(expectedOrder);
+    });
+
+    it("getOverview orders by sortOrder, createdAt, id and exposes sortOrder", async () => {
+      creditCardFindMany.mockResolvedValue([{ ...card(), sortOrder: 3 }]);
+
+      const result = await service.getOverview("user-1");
+
+      expect(firstArg(creditCardFindMany).orderBy).toEqual(expectedOrder);
+      expect(result.cards[0]).toMatchObject({ sortOrder: 3 });
+    });
+  });
+
+  describe("reorder", () => {
+    const owned = (...ids: string[]) =>
+      ids.map((id, index) => ({ id, sortOrder: index }));
+
+    it("rewrites sortOrder to 0..n-1 in the given order inside one transaction", async () => {
+      creditCardFindMany
+        .mockResolvedValueOnce(owned("a", "b", "c"))
+        .mockResolvedValueOnce([{ id: "c" }, { id: "a" }, { id: "b" }]);
+
+      const result = await service.reorder("user-1", ["c", "a", "b"]);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(
+        (creditCardUpdate.mock.calls as CallArgs).map((call) => call[0]),
+      ).toEqual([
+        { where: { id: "c" }, data: { sortOrder: 0 }, select: { id: true } },
+        { where: { id: "a" }, data: { sortOrder: 1 }, select: { id: true } },
+        { where: { id: "b" }, data: { sortOrder: 2 }, select: { id: true } },
+      ]);
+      expect(result).toEqual([{ id: "c" }, { id: "a" }, { id: "b" }]);
+    });
+
+    it("scopes the ownership lookup to the authenticated user", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a"));
+
+      await service.reorder("user-1", ["a"]);
+
+      expect(firstArg(creditCardFindMany).where).toEqual({
+        userId: "user-1",
+      });
+      expect(entitlementsService.assertPremium).toHaveBeenCalledWith(
+        "user-1",
+        "credit_cards_catalog",
+      );
+    });
+
+    it("rejects an id that is unknown or belongs to another user without writing", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a", "b"));
+
+      await expect(
+        service.reorder("user-1", ["a", "foreign"]),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(creditCardUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate ids without writing", async () => {
+      creditCardFindMany.mockResolvedValue(owned("a", "b"));
+
+      await expect(
+        service.reorder("user-1", ["a", "a"]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(creditCardUpdate).not.toHaveBeenCalled();
+    });
+
+    it("places unlisted cards after the listed ones keeping their relative order", async () => {
+      creditCardFindMany
+        .mockResolvedValueOnce(owned("a", "b", "c", "d"))
+        .mockResolvedValueOnce([]);
+
+      await service.reorder("user-1", ["d", "b"]);
+
+      expect(
+        (creditCardUpdate.mock.calls as CallArgs).map(([arg]) => [
+          (arg.where as { id: string }).id,
+          (arg.data as { sortOrder: number }).sortOrder,
+        ]),
+      ).toEqual([
+        ["d", 0],
+        ["b", 1],
+        ["a", 2],
+        ["c", 3],
+      ]);
+    });
+  });
+
+  describe("deletePermanently", () => {
+    it("throws NotFound for a card of another user without deleting", async () => {
+      creditCardFindFirst.mockResolvedValue(null);
+
+      await expect(
+        service.deletePermanently("card-1", "other-user"),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(creditCardFindFirst).toHaveBeenCalledTimes(1);
+      expect(creditCardDelete).not.toHaveBeenCalled();
+    });
+
+    it("throws 409 with statementCount and does not delete when statements exist", async () => {
+      creditCardFindFirst.mockResolvedValue(card());
+      statementImportCount.mockResolvedValue(2);
+
+      const error = await service
+        .deletePermanently("card-1", "user-1")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        code: "CREDIT_CARD_HAS_STATEMENTS",
+        message: "creditCardHasStatements",
+        statementCount: 2,
+      });
+      expect(creditCardDelete).not.toHaveBeenCalled();
+    });
+
+    it("deletes in a transaction and reports unlinked counts", async () => {
+      creditCardFindFirst.mockResolvedValue(card());
+      statementImportCount.mockResolvedValue(0);
+      expenseCount.mockResolvedValue(3);
+      subscriptionCount.mockResolvedValue(1);
+      creditCardDelete.mockResolvedValue({});
+
+      await expect(
+        service.deletePermanently("card-1", "user-1"),
+      ).resolves.toEqual({
         id: "card-1",
-        name: "Nu",
-        bank: "Nu",
-        brand: "VISA",
-        last4: "4242",
-        color: "#7C3AED",
-        creditLimit: 1000,
-        closingDay: 15,
-        paymentDueDay: 25,
-        isActive: true,
-        createdAt: new Date(2026, 0, 1),
-        updatedAt: new Date(2026, 3, 1),
-      },
-      {
-        id: "card-2",
-        name: "Travel",
-        bank: "BBVA",
-        brand: "MASTERCARD",
-        last4: "9090",
-        color: "#2563EB",
-        creditLimit: null,
-        closingDay: null,
-        paymentDueDay: null,
-        isActive: true,
-        createdAt: new Date(2026, 1, 1),
-        updatedAt: new Date(2026, 3, 1),
-      },
-    ]);
-    expenseFindMany.mockResolvedValue([
-      {
-        creditCardId: "card-1",
-        cost: 200,
-        date: new Date(2026, 2, 20, 9, 0, 0, 0),
-      },
-      {
-        creditCardId: "card-1",
-        cost: 150,
-        date: new Date(2026, 3, 5, 11, 0, 0, 0),
-      },
-      {
-        creditCardId: "card-2",
-        cost: 80,
-        date: new Date(2026, 3, 2, 8, 30, 0, 0),
-      },
-    ]);
-    subscriptionFindMany.mockResolvedValue([
-      {
-        id: "sub-1",
-        creditCardId: "card-1",
-        cost: 199,
-        currency: "MXN",
-        billingCycle: "MONTHLY",
-        nextPaymentDate: new Date(2026, 3, 10, 12, 0, 0, 0),
-        isActive: true,
-      },
-    ]);
-
-    const result = await service.getOverview("user-1", {
-      includeInactive: true,
-    });
-    const expenseQuery = expenseFindMany.mock.calls[0]?.[0];
-
-    expect(entitlementsService.assertPremium).toHaveBeenCalledWith(
-      "user-1",
-      "credit_cards_catalog",
-    );
-    expect(result.referenceDate).toBe("2026-04-08");
-    expect(expenseQuery).toBeDefined();
-    expect(expenseQuery?.where.userId).toBe("user-1");
-    expect(expenseQuery?.where.date.gte).toEqual(
-      new Date(2026, 2, 16, 0, 0, 0, 0),
-    );
-    expect(expenseQuery?.where.date.lte).toEqual(
-      new Date(2026, 3, 8, 10, 0, 0, 0),
-    );
-    expect(result.portfolio).toEqual({
-      trackedCards: 2,
-      activeCards: 2,
-      cardsWithLimit: 1,
-      totalCreditLimit: 1000,
-      totalCurrentCycleSpend: 430,
-      totalAvailableCredit: 650,
-      utilizationPercent: 43,
-      paymentDueSoonCount: 0,
-      highUtilizationCount: 0,
-      linkedSubscriptionsCount: 1,
-      monthlyRecurringSpend: 199,
-    });
-    expect(result.cards[0]).toMatchObject({
-      id: "card-1",
-      currentCycle: {
-        start: "2026-03-16",
-        end: "2026-04-15",
-        spend: 350,
-        expenseCount: 2,
-      },
-      creditStatus: {
-        limit: 1000,
-        availableCredit: 650,
-        utilizationPercent: 35,
-      },
-      schedule: {
-        nextClosingDate: "2026-04-15",
-        daysUntilClosing: 7,
-        nextPaymentDueDate: "2026-04-25",
-        daysUntilPaymentDue: 17,
-      },
-      subscriptions: {
-        activeCount: 1,
-        monthlyRecurringSpend: 199,
-        nextChargeDate: "2026-04-10",
-      },
-      flags: {
-        missingLimit: false,
-        highUtilization: false,
-        overLimit: false,
-        paymentDueSoon: false,
-        closingSoon: false,
-      },
-    });
-    expect(result.cards[1]).toMatchObject({
-      id: "card-2",
-      currentCycle: {
-        start: "2026-04-01",
-        end: "2026-04-30",
-        spend: 80,
-        expenseCount: 1,
-      },
-      creditStatus: {
-        limit: null,
-        availableCredit: null,
-        utilizationPercent: null,
-      },
-      flags: {
-        missingLimit: true,
-      },
+        deleted: true,
+        unlinkedExpenses: 3,
+        unlinkedSubscriptions: 1,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(creditCardDelete).toHaveBeenCalledWith({
+        where: { id: "card-1" },
+      });
     });
   });
+
+  it("uses only the latest matching-currency statement balance", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 300,
+        paidAmount: 100,
+        periodEnd: "2026-03-31",
+      }),
+      statement({
+        closingBalance: 900,
+        paidAmount: 0,
+        periodEnd: "2026-02-28",
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].creditStatus).toMatchObject({
+      owedBalance: 200,
+      availableCredit: 800,
+      utilizationPercent: 20,
+    });
+    expect(result.cards[0].statementSummary).toMatchObject({
+      closingBalance: 300,
+      paidTotal: 100,
+      remainingStatement: 200,
+      projectedTotalDebt: 200,
+    });
+  });
+
+  it("excludes pre-close unlinked expenses and includes post-close expenses", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 300,
+        paidAmount: 100,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [
+        expense({ cost: 50, date: "2026-03-30T12:00:00.000Z" }),
+        expense({ cost: 75, date: "2026-04-01T00:00:00.000Z" }),
+      ],
+    );
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].creditStatus.owedBalance).toBe(275);
+    expect(result.cards[0].statementSummary).toMatchObject({
+      postCloseSpend: 75,
+      postCloseExpenseCount: 1,
+      projectedNextCloseAmount: 75,
+      projectedTotalDebt: 275,
+    });
+  });
+
+  it("keeps spend dated before the cutoff day out of post-close spend", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 300, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [
+        expense({ cost: 50, date: "2026-03-30T23:59:59.999Z" }),
+        expense({ cost: 75, date: "2026-04-01T00:00:00.000Z" }),
+      ],
+    );
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary).toMatchObject({
+      postCloseSpend: 75,
+      postCloseExpenseCount: 1,
+    });
+  });
+
+  it("counts unmatched non-installment spend dated on the cutoff day", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 300, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [
+        expense({ id: "a", cost: 50, date: "2026-03-31T00:00:00.000Z" }),
+        expense({ id: "b", cost: 25, date: "2026-03-31T23:59:59.999Z" }),
+        expense({ id: "c", cost: 10, date: "2026-03-30T23:59:59.999Z" }),
+      ],
+    );
+
+    const summary = (await service.getOverview("user-1", {})).cards[0]
+      .statementSummary;
+
+    expect(summary).toMatchObject({
+      postCloseSpend: 75,
+      postCloseExpenseCount: 2,
+      projectedTotalDebt: 375,
+    });
+  });
+
+  it("does not pull installment rows of the cutoff day into post-close debt", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 0, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [installmentExpense({ cost: 100, date: "2026-03-31T00:00:00.000Z" })],
+    );
+
+    const summary = (await service.getOverview("user-1", {})).cards[0]
+      .statementSummary;
+
+    expect(summary.projectedTotalDebt).toBe(0);
+  });
+
+  it("excludes future-dated unlinked spend from projections", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({ closingBalance: 300, periodEnd: "2026-03-31" }),
+    ]);
+    mockExpenseQueries(
+      [],
+      [
+        expense({ cost: 75, date: "2026-04-01T00:00:00.000Z" }),
+        expense({ cost: 500, date: "2026-04-09T00:00:00.000Z" }),
+      ],
+    );
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.projectedNextCloseAmount).toBe(75);
+  });
+
+  it("uses every eligible unlinked expense when no confirmed statement exists", async () => {
+    mockExpenseQueries(
+      [],
+      [
+        expense({ cost: 50, date: "2026-01-01T12:00:00.000Z" }),
+        expense({ cost: 75, date: "2026-04-01T00:00:00.000Z" }),
+      ],
+    );
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].creditStatus.owedBalance).toBe(125);
+    expect(result.cards[0].statementSummary.projectedNextCloseAmount).toBe(125);
+  });
+
+  it("excludes currency mismatches from card money and exposes a warning count", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        currency: "USD",
+        closingBalance: 500,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    mockExpenseQueries(
+      [
+        expense({
+          cost: 20,
+          currency: "USD",
+          date: "2026-04-02T00:00:00.000Z",
+        }),
+      ],
+      [
+        expense({
+          cost: 30,
+          currency: "USD",
+          date: "2026-04-02T00:00:00.000Z",
+        }),
+      ],
+    );
+    subscriptionFindMany.mockResolvedValue([
+      subscription({ cost: 40, currency: "USD" }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0]).toMatchObject({
+      currentCycle: { spend: 0, expenseCount: 0, currencyMismatchCount: 1 },
+      creditStatus: { owedBalance: 0, availableCredit: 1000 },
+      subscriptions: { monthlyRecurringSpend: 0, currencyMismatchCount: 1 },
+      flags: { currencyMismatch: true },
+    });
+    expect(result.cards[0].currencyMismatchCount).toBeGreaterThan(0);
+  });
+
+  it("counts one mismatched unlinked expense once across overlapping queries", async () => {
+    const mismatchedExpense = expense({
+      id: "overlapping-expense",
+      cost: 20,
+      currency: "USD",
+      date: "2026-04-02T00:00:00.000Z",
+    });
+    mockExpenseQueries([mismatchedExpense], [mismatchedExpense]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].currencyMismatchCount).toBe(1);
+    expect(result.cards[0]).not.toHaveProperty("expenseIds");
+  });
+
+  it("ignores a foreign-currency target and falls back to closing balance", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 300,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "USD",
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].nextPayment).toMatchObject({
+      amount: 300,
+      currency: "MXN",
+    });
+    expect(result.cards[0].flags.currencyMismatch).toBe(true);
+  });
+
+  it("keeps portfolio monetary totals separate by currency", async () => {
+    creditCardFindMany.mockResolvedValue([
+      card({ id: "mxn-card", currency: "MXN", creditLimit: 1000 }),
+      card({ id: "usd-card", currency: "USD", creditLimit: 500 }),
+    ]);
+    mockExpenseQueries(
+      [
+        expense({ creditCardId: "mxn-card", cost: 100, currency: "MXN" }),
+        expense({ creditCardId: "usd-card", cost: 50, currency: "USD" }),
+      ],
+      [
+        expense({ creditCardId: "mxn-card", cost: 100, currency: "MXN" }),
+        expense({ creditCardId: "usd-card", cost: 50, currency: "USD" }),
+      ],
+    );
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.portfolio.byCurrency).toEqual([
+      expect.objectContaining({
+        currency: "MXN",
+        totalCreditLimit: 1000,
+        totalOwedBalance: 100,
+        totalCurrentCycleSpend: 100,
+      }),
+      expect.objectContaining({
+        currency: "USD",
+        totalCreditLimit: 500,
+        totalOwedBalance: 50,
+        totalCurrentCycleSpend: 50,
+      }),
+    ]);
+    expect(result.portfolio).not.toHaveProperty("totalCreditLimit");
+  });
+
+  it("keeps partially paid statement debt even when paid status is true", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 4199.31,
+        paidAmount: 2000,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].creditStatus.owedBalance).toBe(2199.31);
+  });
+
+  it("subtracts active payments from the current no-interest payment due", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 125,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 300,
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.currentPaymentDue).toBe(175);
+    expect(result.cards[0].nextPayment?.amount).toBe(175);
+  });
+
+  it("never projects less debt than the current payment due", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 4199.31,
+        paidAmount: 4199.31,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 10651.6,
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.currentPaymentDue).toBe(6452.29);
+    expect(card.statementSummary.remainingStatement).toBe(6452.29);
+    expect(card.creditStatus.owedBalance).toBe(6452.29);
+    expect(card.statementSummary.projectedTotalDebt).toBe(6452.29);
+  });
+
+  it("exposes the minimum payment target of the latest statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 300,
+        minimumPayment: { amount: 42.5 },
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.minimumPayment).toBe(42.5);
+  });
+
+  it("returns a null minimum payment when the statement has none or it is in another currency", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        periodEnd: "2026-03-31",
+        minimumPayment: { amount: 10, currency: "USD" },
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.minimumPayment).toBeNull();
+  });
+
+  it("falls back to closing balance for the current payment due", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 125,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+
+    expect(result.cards[0].statementSummary.currentPaymentDue).toBe(375);
+    expect(result.cards[0].nextPayment?.amount).toBe(375);
+  });
+
+  it("adds deferred installment balances to the debt of a fully paid statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 500,
+        periodEnd: "2026-03-31",
+        plans: [
+          { remainingAmount: 489.91 },
+          { remainingAmount: 2865.55 },
+          { remainingAmount: null },
+        ],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.deferredInstallmentBalance).toBe(3355.46);
+    expect(card.creditStatus.owedBalance).toBe(3355.46);
+    expect(card.statementSummary.projectedTotalDebt).toBe(3355.46);
+    expect(card.statementSummary.remainingStatement).toBe(0);
+    expect(card.creditStatus.availableCredit).toBe(1000 - 3355.46);
+    expect(result.portfolio.byCurrency[0]).toMatchObject({
+      totalOwedBalance: 3355.46,
+      totalDeferredInstallmentBalance: 3355.46,
+    });
+  });
+
+  it("adds deferred installment balances on top of an unpaid statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 100,
+        periodEnd: "2026-03-31",
+        paymentTargetCurrency: "MXN",
+        paymentTargetAmount: 300,
+        plans: [{ remainingAmount: 200 }],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    const [card] = result.cards;
+
+    expect(card.statementSummary.currentPaymentDue).toBe(200);
+    expect(card.statementSummary.remainingStatement).toBe(400);
+    expect(card.statementSummary.deferredInstallmentBalance).toBe(200);
+    expect(card.creditStatus.owedBalance).toBe(600);
+    expect(card.statementSummary.projectedTotalDebt).toBe(600);
+  });
+
+  it("ignores deferred plans in another currency and reports zero without plans", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+        plans: [
+          { remainingAmount: 900, currency: "USD" },
+          { remainingAmount: 100 },
+        ],
+      }),
+    ]);
+
+    const result = await service.getOverview("user-1", {});
+    expect(result.cards[0].statementSummary.deferredInstallmentBalance).toBe(
+      100,
+    );
+    expect(result.cards[0].creditStatus.owedBalance).toBe(600);
+
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    const without = await service.getOverview("user-1", {});
+    expect(without.cards[0].statementSummary.deferredInstallmentBalance).toBe(
+      0,
+    );
+  });
+
+  it("exposes installment plans from the latest statement", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+        plans: [
+          {
+            id: "plan-a",
+            type: "INTEREST_BEARING",
+            merchantName: "Store",
+            purchaseDate: new Date("2025-12-15T12:00:00.000Z"),
+            originalAmount: 1200,
+            installmentNumber: 3,
+            installmentCount: 12,
+            installmentAmount: 100,
+            remainingAmount: 900,
+          },
+          {
+            id: "plan-b",
+            installmentNumber: 6,
+            installmentCount: 6,
+            remainingAmount: null,
+          },
+        ],
+      }),
+    ]);
+
+    const [card] = (await service.getOverview("user-1", {})).cards;
+
+    expect(card.installmentPlans).toEqual([
+      {
+        id: "plan-a",
+        type: "INTEREST_BEARING",
+        merchantName: "Store",
+        purchaseDate: "2025-12-15",
+        originalAmount: 1200,
+        installmentNumber: 3,
+        installmentCount: 12,
+        installmentAmount: 100,
+        remainingAmount: 900,
+        currency: "MXN",
+        isFinalInstallment: false,
+        statementPeriodEnd: "2026-03-31",
+      },
+      {
+        id: "plan-b",
+        type: "NO_INTEREST",
+        merchantName: null,
+        purchaseDate: null,
+        originalAmount: null,
+        installmentNumber: 6,
+        installmentCount: 6,
+        installmentAmount: null,
+        remainingAmount: null,
+        currency: "MXN",
+        isFinalInstallment: true,
+        statementPeriodEnd: "2026-03-31",
+      },
+    ]);
+  });
+
+  it("returns empty installmentPlans without a statement or plans", async () => {
+    statementImportFindMany.mockResolvedValue([
+      statement({
+        closingBalance: 500,
+        paidAmount: 0,
+        periodEnd: "2026-03-31",
+      }),
+    ]);
+    expect(
+      (await service.getOverview("user-1", {})).cards[0].installmentPlans,
+    ).toEqual([]);
+
+    statementImportFindMany.mockResolvedValue([]);
+    expect(
+      (await service.getOverview("user-1", {})).cards[0].installmentPlans,
+    ).toEqual([]);
+  });
+
+  it("returns the configured currency from create writes", async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValue({ id: "card-1", currency: "USD" });
+    const aggregate = jest
+      .fn()
+      .mockResolvedValue({ _max: { sortOrder: null } });
+    const txClient = { creditCard: { create, aggregate } };
+    const writeService = new CreditCardsService(
+      {
+        $transaction: (fn: (tx: unknown) => unknown) => fn(txClient),
+      } as never,
+      entitlementsService as never,
+    );
+
+    await writeService.create("user-1", {
+      name: "Travel",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+      currency: "USD",
+    });
+
+    const createCalls = create.mock.calls as Array<
+      [{ data: { currency: string } }]
+    >;
+    const createCall = createCalls[0][0];
+    expect(createCall.data.currency).toBe("USD");
+  });
+
+  it("normalizes valid card currency and rejects invalid codes", async () => {
+    const valid = plainToInstance(CreateCreditCardDto, {
+      name: "Travel",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+      currency: " usd ",
+    });
+    const invalid = plainToInstance(CreateCreditCardDto, {
+      name: "Travel",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+      currency: "US",
+    });
+
+    await expect(validate(valid)).resolves.toHaveLength(0);
+    expect(valid.currency).toBe("USD");
+    expect(await validate(invalid)).not.toHaveLength(0);
+  });
+
+  it("does not default currency on a partial update", () => {
+    const update = plainToInstance(UpdateCreditCardDto, { name: "Updated" });
+
+    expect(update.currency).toBeUndefined();
+  });
+
+  describe("statement cycle coverage", () => {
+    // Card closes on day 15.
+    const summaryAt = async (
+      now: string,
+      periodEnd: string | null,
+      paidAmount: number,
+    ) => {
+      jest.setSystemTime(new Date(now));
+      statementImportFindMany.mockResolvedValue(
+        periodEnd
+          ? [statement({ closingBalance: 500, paidAmount, periodEnd })]
+          : [],
+      );
+      return (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+    };
+
+    it("flags a paid statement from a closed past cycle as needing a new statement", async () => {
+      const summary = await summaryAt(
+        "2026-04-16T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.paymentStatus).toBe("PAID");
+      expect(summary.coversCurrentCycle).toBe(false);
+      expect(summary.needsNewStatement).toBe(true);
+    });
+
+    it("flags it on the closing day itself", async () => {
+      const summary = await summaryAt(
+        "2026-04-15T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.needsNewStatement).toBe(true);
+    });
+
+    it("does not flag a paid statement of the last closed cycle", async () => {
+      const summary = await summaryAt(
+        "2026-04-08T10:00:00.000Z",
+        "2026-03-15",
+        500,
+      );
+      expect(summary.paymentStatus).toBe("PAID");
+      expect(summary.coversCurrentCycle).toBe(true);
+      expect(summary.needsNewStatement).toBe(false);
+    });
+
+    it("does not flag an unpaid statement even if old", async () => {
+      const summary = await summaryAt(
+        "2026-04-16T10:00:00.000Z",
+        "2026-03-15",
+        0,
+      );
+      expect(summary.paymentStatus).toBe("UNPAID");
+      expect(summary.needsNewStatement).toBe(false);
+    });
+
+    it("does not flag a card without statements", async () => {
+      const summary = await summaryAt("2026-04-16T10:00:00.000Z", null, 0);
+      expect(summary.coversCurrentCycle).toBe(true);
+      expect(summary.needsNewStatement).toBe(false);
+    });
+  });
+
+  describe("next close payment estimate", () => {
+    // System time 2026-04-08; the card closes on day 15 => next close 2026-04-15.
+    it("estimates the next payment from plan installments only", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 500,
+          paidAmount: 500,
+          periodEnd: "2026-03-31",
+          plans: [
+            { remainingAmount: 1000, installmentAmount: 250 },
+            { remainingAmount: 100, installmentAmount: 250 },
+          ],
+        }),
+      ]);
+
+      const { cards, portfolio } = await service.getOverview("user-1", {});
+      const summary = cards[0].statementSummary;
+
+      expect(summary.nextPlanInstallments).toBe(350);
+      expect(summary.nextClosePaymentEstimate).toBe(350);
+      expect(summary.projectedTotalDebt).toBe(1100);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(750);
+      expect(portfolio.byCurrency[0]).toMatchObject({
+        totalNextClosePaymentEstimate: 350,
+        totalEstimatedRemainingAfterNextClose: 750,
+      });
+    });
+
+    it("counts a whole installment group as debt but only the due installment in the estimate", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          paidAmount: 0,
+          periodEnd: "2026-03-31",
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          expense({
+            id: "regular",
+            cost: 50,
+            date: "2026-04-02T00:00:00.000Z",
+          }),
+          installmentExpense({ id: "i1", cost: 100, date: "2026-04-10" }),
+          installmentExpense({ id: "i2", cost: 100, date: "2026-05-10" }),
+          installmentExpense({ id: "i3", cost: 100, date: "2026-06-10" }),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(350);
+      expect(summary.nextClosePaymentEstimate).toBe(150);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(200);
+      // Existing field keeps its meaning: spend registered after the close.
+      expect(summary.postCloseSpend).toBe(350);
+      expect(summary.projectedNextCloseAmount).toBe(350);
+    });
+
+    it("still ignores future-dated regular expenses", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({ closingBalance: 0, periodEnd: "2026-03-31" }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          expense({ cost: 40, date: "2026-04-05T00:00:00.000Z" }),
+          expense({ cost: 900, date: "2026-04-12T00:00:00.000Z" }),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(40);
+      expect(summary.nextClosePaymentEstimate).toBe(40);
+    });
+
+    it("ignores installment rows that fall on or before the statement period end", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({ closingBalance: 0, periodEnd: "2026-03-31" }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [installmentExpense({ cost: 100, date: "2026-03-31T10:00:00.000Z" })],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(0);
+      expect(summary.nextClosePaymentEstimate).toBe(0);
+    });
+
+    it("asks the database for future-dated installment rows and selects isInstallment", async () => {
+      await service.getOverview("user-1", {});
+
+      const unlinkedCall = (
+        expenseFindMany.mock.calls as Array<
+          [
+            {
+              where: Record<string, unknown>;
+              select: Record<string, boolean>;
+            },
+          ]
+        >
+      ).find(([args]) => "statementRowId" in args.where);
+
+      expect(unlinkedCall?.[0].select.isInstallment).toBe(true);
+      expect(unlinkedCall?.[0].where.OR).toEqual([
+        { date: { lte: new Date("2026-04-08T10:00:00.000Z") } },
+        { isInstallment: true },
+      ]);
+    });
+
+    it("excludes installment rows in another currency from money and warns", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({ closingBalance: 0, periodEnd: "2026-03-31" }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          installmentExpense({
+            id: "usd",
+            cost: 100,
+            currency: "USD",
+            date: "2026-04-10",
+          }),
+        ],
+      );
+
+      const [card] = (await service.getOverview("user-1", {})).cards;
+
+      expect(card.statementSummary.projectedTotalDebt).toBe(0);
+      expect(card.statementSummary.nextClosePaymentEstimate).toBe(0);
+      expect(card.currencyMismatchCount).toBe(1);
+    });
+
+    it("ignores plans in another currency and finished plans", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [
+            { remainingAmount: 900, installmentAmount: 300, currency: "USD" },
+            { remainingAmount: 0, installmentAmount: 120 },
+            { remainingAmount: null, installmentAmount: 80 },
+          ],
+        }),
+      ]);
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.nextPlanInstallments).toBe(0);
+      expect(summary.nextClosePaymentEstimate).toBe(0);
+    });
+
+    it("reports zero estimates without a confirmed statement", async () => {
+      mockExpenseQueries(
+        [],
+        [expense({ cost: 60, date: "2026-04-02T00:00:00.000Z" })],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.nextPlanInstallments).toBe(0);
+      expect(summary.nextClosePaymentEstimate).toBe(60);
+      expect(summary.projectedTotalDebt).toBe(60);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(0);
+    });
+
+    it("uses only plans and regular post-close spend when the card has no closing day", async () => {
+      creditCardFindMany.mockResolvedValue([{ ...card(), closingDay: null }]);
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [{ remainingAmount: 500, installmentAmount: 100 }],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          expense({ cost: 30, date: "2026-04-02T00:00:00.000Z" }),
+          installmentExpense({ cost: 70, date: "2026-04-10" }),
+          installmentExpense({ cost: 70, date: "2026-05-10" }),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.nextClosePaymentEstimate).toBe(130);
+      expect(summary.projectedTotalDebt).toBe(670);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(540);
+    });
+
+    it("never reports a negative remainder", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 100,
+          paidAmount: 0,
+          periodEnd: "2026-03-31",
+          plans: [{ remainingAmount: 50, installmentAmount: 50 }],
+        }),
+      ]);
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(150);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(0);
+    });
+
+    it("matches the real-data sanity case", async () => {
+      const pairs: Array<[number, number]> = [
+        [5416.25, 1083.25],
+        [611.67, 305.83],
+        [499.25, 274.52],
+        [480.67, 264.31],
+        [276.13, 276.13],
+        [242.66, 242.67],
+        [191.24, 203.81],
+        [153.1, 153.09],
+      ];
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 4000,
+          paidAmount: 4000,
+          periodEnd: "2026-03-31",
+          plans: [
+            ...pairs.map(([remainingAmount, installmentAmount]) => ({
+              remainingAmount,
+              installmentAmount,
+            })),
+            ...[0, 0, 0, 0].map((remainingAmount) => ({
+              remainingAmount,
+              installmentAmount: 150,
+            })),
+          ],
+        }),
+      ]);
+      // 728 / 3 and 622 / 3 split as the expense service does (cents; the
+      // last installment absorbs the remainder).
+      const [a1, a2, a3] = splitAmountAcrossInstallments(728, 3);
+      const [b1, b2, b3] = splitAmountAcrossInstallments(622, 3);
+      mockExpenseQueries(
+        [],
+        [
+          expense({ id: "r1", cost: 2000, date: "2026-04-02T00:00:00.000Z" }),
+          expense({ id: "r2", cost: 1347.4, date: "2026-04-06T00:00:00.000Z" }),
+          installmentExpense({ id: "a1", cost: a1, date: "2026-04-10" }),
+          installmentExpense({ id: "a2", cost: a2, date: "2026-05-10" }),
+          installmentExpense({ id: "a3", cost: a3, date: "2026-06-10" }),
+          installmentExpense({ id: "b1", cost: b1, date: "2026-04-12" }),
+          installmentExpense({ id: "b2", cost: b2, date: "2026-05-12" }),
+          installmentExpense({ id: "b3", cost: b3, date: "2026-06-12" }),
+        ],
+      );
+
+      const { cards, portfolio } = await service.getOverview("user-1", {});
+      const summary = cards[0].statementSummary;
+
+      expect([a1, b1]).toEqual([242.66, 207.33]);
+      expect(summary.statementImportId).not.toBeNull();
+      expect(summary.remainingStatement).toBe(0);
+      expect(summary.deferredInstallmentBalance).toBe(7870.97);
+      expect(summary.nextPlanInstallments).toBe(2791.03);
+      expect(summary.postCloseSpend).toBe(4697.4);
+      expect(summary.projectedTotalDebt).toBe(12568.37);
+      expect(summary.nextClosePaymentEstimate).toBe(6588.42);
+      expect(summary.estimatedRemainingAfterNextClose).toBe(5979.95);
+      expect(portfolio.byCurrency[0]).toMatchObject({
+        totalNextClosePaymentEstimate: 6588.42,
+        totalEstimatedRemainingAfterNextClose: 5979.95,
+      });
+    });
+  });
+
+  describe("installment groups already in the statement", () => {
+    const amazonPlan = {
+      merchantName: "AMAZON MEXICO",
+      originalAmount: 728,
+      installmentNumber: 1,
+      installmentCount: 3,
+      remainingAmount: 500.62,
+      installmentAmount: 242.66,
+    };
+    const group = (
+      groupId: string,
+      title: string,
+      total: number,
+      count: number,
+      dates: string[],
+    ) => {
+      const parts = splitAmountAcrossInstallments(total, count);
+      return parts.map((cost, i) =>
+        installmentExpense({
+          id: `${groupId}-${i + 1}`,
+          cost,
+          date: dates[i],
+          title,
+          installmentGroupId: groupId,
+          installmentIndex: i + 1,
+          installmentCount: count,
+          installmentTotalAmount: total,
+        }),
+      );
+    };
+
+    it("does not count future cuotas again when the plan is already in the statement", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      // Cuota 1 is matched to a statement row (so absent); 2/3 and 3/3 remain.
+      mockExpenseQueries(
+        [],
+        group("amz", "Amazon Mexico", 728, 3, [
+          "2026-03-10",
+          "2026-04-10",
+          "2026-05-10",
+        ]).slice(1),
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.deferredInstallmentBalance).toBe(500.62);
+      expect(summary.projectedTotalDebt).toBe(500.62);
+      expect(summary.postCloseSpend).toBe(0);
+      expect(summary.postCloseExpenseCount).toBe(0);
+      // Next cuota comes from the plan only, never from the expense row too.
+      expect(summary.nextPlanInstallments).toBe(242.66);
+      expect(summary.nextClosePaymentEstimate).toBe(242.66);
+    });
+
+    it("matches the group by merchantName as well as title", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [{ ...amazonPlan, merchantName: "AMAZON MEXICO MP" }],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        group("amz", "Compra", 728, 3, [
+          "2026-03-10",
+          "2026-04-10",
+          "2026-05-10",
+        ]).map((row) => ({ ...row, merchantName: "Amazon Mexico" })),
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.projectedTotalDebt).toBe(500.62);
+    });
+
+    it("still counts in full an installment purchase that is not in the statement", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          ...group("amz", "Amazon Mexico", 728, 3, [
+            "2026-03-10",
+            "2026-04-10",
+            "2026-05-10",
+          ]).slice(1),
+          ...group("wuzi", "Wuzipay", 940.5, 3, [
+            "2026-04-02",
+            "2026-05-02",
+            "2026-06-02",
+          ]),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.postCloseSpend).toBe(940.5);
+      expect(summary.postCloseExpenseCount).toBe(3);
+      expect(summary.projectedTotalDebt).toBe(1441.12);
+    });
+
+    it("does not match a plan with a different total or installment count", async () => {
+      statementImportFindMany.mockResolvedValue([
+        statement({
+          closingBalance: 0,
+          periodEnd: "2026-03-31",
+          plans: [amazonPlan],
+        }),
+      ]);
+      mockExpenseQueries(
+        [],
+        [
+          ...group("amz-a", "Amazon Mexico", 800, 3, [
+            "2026-04-10",
+            "2026-05-10",
+            "2026-06-10",
+          ]),
+          ...group("amz-b", "Amazon Mexico", 728, 6, [
+            "2026-04-10",
+            "2026-05-10",
+            "2026-06-10",
+            "2026-07-10",
+            "2026-08-10",
+            "2026-09-10",
+          ]),
+        ],
+      );
+
+      const summary = (await service.getOverview("user-1", {})).cards[0]
+        .statementSummary;
+
+      expect(summary.postCloseSpend).toBe(1528);
+    });
+  });
+
+  function installmentExpense(
+    overrides: Partial<{
+      id: string;
+      cost: number;
+      currency: string;
+      date: string;
+      title: string;
+      merchantName: string | null;
+      installmentGroupId: string | null;
+      installmentIndex: number | null;
+      installmentCount: number | null;
+      installmentTotalAmount: number | null;
+    }> = {},
+  ) {
+    return expense({
+      ...overrides,
+      date: overrides.date?.includes("T")
+        ? overrides.date
+        : `${overrides.date ?? "2026-04-10"}T00:00:00.000Z`,
+      isInstallment: true,
+    });
+  }
+
+  function mockExpenseQueries(cycleRows: unknown[], unlinkedRows: unknown[]) {
+    expenseFindMany.mockImplementation(
+      (args: { where: { statementRowId?: null } }) =>
+        Promise.resolve(
+          "statementRowId" in args.where ? unlinkedRows : cycleRows,
+        ),
+    );
+  }
+
+  function card(
+    overrides: Partial<{
+      id: string;
+      currency: string;
+      creditLimit: number;
+    }> = {},
+  ) {
+    return {
+      id: overrides.id ?? "card-1",
+      name: "Rewards",
+      bank: "Bank",
+      brand: "VISA",
+      last4: "4242",
+      color: "#7C3AED",
+      creditLimit: overrides.creditLimit ?? 1000,
+      closingDay: 15,
+      paymentDueDay: 25,
+      currency: overrides.currency ?? "MXN",
+      isActive: true,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-01T00:00:00.000Z"),
+      sortOrder: 0,
+    };
+  }
+
+  function expense(
+    overrides: Partial<{
+      id: string;
+      creditCardId: string;
+      cost: number;
+      currency: string;
+      date: string;
+      isInstallment: boolean;
+      title: string;
+      merchantName: string | null;
+      installmentGroupId: string | null;
+      installmentIndex: number | null;
+      installmentCount: number | null;
+      installmentTotalAmount: number | null;
+    }> = {},
+  ) {
+    return {
+      title: overrides.title ?? "Expense",
+      merchantName: overrides.merchantName ?? null,
+      installmentGroupId: overrides.installmentGroupId ?? null,
+      installmentIndex: overrides.installmentIndex ?? null,
+      installmentCount: overrides.installmentCount ?? null,
+      installmentTotalAmount: overrides.installmentTotalAmount ?? null,
+      id: overrides.id ?? "expense-1",
+      creditCardId: overrides.creditCardId ?? "card-1",
+      cost: overrides.cost ?? 100,
+      currency: overrides.currency ?? "MXN",
+      date: new Date(overrides.date ?? "2026-04-02T00:00:00.000Z"),
+      isInstallment: overrides.isInstallment ?? false,
+    };
+  }
+
+  function subscription(
+    overrides: Partial<{ cost: number; currency: string }> = {},
+  ) {
+    return {
+      id: "subscription-1",
+      creditCardId: "card-1",
+      cost: overrides.cost ?? 100,
+      currency: overrides.currency ?? "MXN",
+      billingCycle: "MONTHLY",
+      nextPaymentDate: new Date("2026-04-10T00:00:00.000Z"),
+      isActive: true,
+    };
+  }
+
+  function statement(options: {
+    currency?: string;
+    closingBalance: number;
+    paidAmount?: number | null;
+    periodEnd: string;
+    paymentTargetCurrency?: string;
+    paymentTargetAmount?: number;
+    minimumPayment?: { amount: number; currency?: string };
+    plans?: Array<{
+      remainingAmount: number | null;
+      installmentAmount?: number | null;
+      currency?: string;
+      id?: string;
+      type?: "NO_INTEREST" | "INTEREST_BEARING" | "REFINANCED";
+      merchantName?: string | null;
+      purchaseDate?: Date | null;
+      originalAmount?: number | null;
+      installmentNumber?: number | null;
+      installmentCount?: number | null;
+    }>;
+  }) {
+    return {
+      id: `statement-${options.periodEnd}`,
+      creditCardId: "card-1",
+      periodStart: new Date(`${options.periodEnd.slice(0, 8)}01T12:00:00.000Z`),
+      periodEnd: new Date(`${options.periodEnd}T12:00:00.000Z`),
+      createdAt: new Date(`${options.periodEnd}T13:00:00.000Z`),
+      reconciliation: {
+        closingBalance: options.closingBalance,
+        currency: options.currency ?? "MXN",
+        status: "PASSED",
+      },
+      paymentTargets: [
+        ...(options.paymentTargetCurrency
+          ? [
+              {
+                kind: "NO_INTEREST",
+                amount: options.paymentTargetAmount ?? options.closingBalance,
+                currency: options.paymentTargetCurrency,
+                dueDate: new Date("2026-04-25T12:00:00.000Z"),
+                position: 0,
+              },
+            ]
+          : []),
+        ...(options.minimumPayment
+          ? [
+              {
+                kind: "MINIMUM",
+                amount: options.minimumPayment.amount,
+                currency: options.minimumPayment.currency ?? "MXN",
+                dueDate: new Date("2026-04-25T12:00:00.000Z"),
+                position: 1,
+              },
+            ]
+          : []),
+      ],
+      financingPlans: (options.plans ?? []).map((plan, index) => ({
+        id: plan.id ?? `plan-${index}`,
+        type: plan.type ?? "NO_INTEREST",
+        merchantName: plan.merchantName ?? null,
+        purchaseDate: plan.purchaseDate ?? null,
+        originalAmount: plan.originalAmount ?? null,
+        installmentNumber: plan.installmentNumber ?? null,
+        installmentCount: plan.installmentCount ?? null,
+        remainingAmount: plan.remainingAmount,
+        installmentAmount: plan.installmentAmount ?? null,
+        currency: plan.currency ?? "MXN",
+      })),
+      payments:
+        options.paidAmount && options.paidAmount > 0
+          ? [
+              {
+                amount: options.paidAmount,
+                currency: options.currency ?? "MXN",
+                voidedAt: null,
+              },
+            ]
+          : [],
+    };
+  }
 });

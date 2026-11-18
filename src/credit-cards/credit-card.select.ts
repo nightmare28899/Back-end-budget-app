@@ -8,7 +8,9 @@ export const creditCardPublicSelect = {
   creditLimit: true,
   closingDay: true,
   paymentDueDay: true,
+  currency: true,
   isActive: true,
+  sortOrder: true,
   createdAt: true,
   updatedAt: true,
 } as const;

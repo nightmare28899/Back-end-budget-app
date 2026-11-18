@@ -1,9 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { BillingCycle, PaymentMethod } from "@prisma/client";
+import {
+  Prisma,
+  BillingCycle,
+  PaymentMethod,
+  StatementFinancingType,
+  StatementImportStatus,
+  StatementPaymentStatus,
+  StatementPaymentTargetKind,
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateCreditCardDto } from "./dto/create-credit-card.dto";
 import { UpdateCreditCardDto } from "./dto/update-credit-card.dto";
@@ -12,6 +21,19 @@ import { creditCardPublicSelect } from "./credit-card.select";
 import { isCreditCardPaymentMethod } from "../common/payments/payment-method.utils";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
 import { formatDateOnly } from "../common/budget/budget.utils";
+import { planMatchesExpense } from "../expenses/financing-plan-matcher";
+import {
+  calculateStatementPaymentSummary,
+  type StatementPaymentSummary,
+} from "../card-statements/statement-payment-summary";
+
+const STATEMENT_CLOSE_TOLERANCE_DAYS = 7;
+
+const CREDIT_CARD_ORDER_BY: Prisma.CreditCardOrderByWithRelationInput[] = [
+  { sortOrder: "asc" },
+  { createdAt: "asc" },
+  { id: "asc" },
+];
 
 type CreditCardRow = {
   id: string;
@@ -23,15 +45,19 @@ type CreditCardRow = {
   creditLimit: number | null;
   closingDay: number | null;
   paymentDueDay: number | null;
+  currency: string;
   isActive: boolean;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 };
 
 type CreditCardExpenseRow = {
+  id: string;
   creditCardId: string | null;
   cost: number;
   date: Date;
+  currency: string;
 };
 
 type CreditCardSubscriptionRow = {
@@ -42,6 +68,47 @@ type CreditCardSubscriptionRow = {
   billingCycle: BillingCycle;
   nextPaymentDate: Date;
   isActive: boolean;
+};
+
+type ConfirmedStatementRow = {
+  id: string;
+  creditCardId: string | null;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  createdAt: Date;
+  paymentSummary: StatementPaymentSummary;
+  financingPlans: Array<{
+    id: string;
+    type: StatementFinancingType;
+    merchantName: string | null;
+    purchaseDate: Date | null;
+    originalAmount: number | null;
+    installmentNumber: number | null;
+    installmentCount: number | null;
+    remainingAmount: number | null;
+    installmentAmount: number | null;
+    currency: string;
+  }>;
+  paymentTargets: Array<{
+    kind: StatementPaymentTargetKind;
+    amount: number;
+    currency: string;
+    dueDate: Date | null;
+    position: number;
+  }>;
+};
+
+type UnbilledExpenseRow = {
+  id: string;
+  creditCardId: string | null;
+  cost: number;
+  currency: string;
+  date: Date;
+  isInstallment: boolean;
+  title: string;
+  merchantName: string | null;
+  installmentCount: number | null;
+  installmentTotalAmount: number | null;
 };
 
 @Injectable()
@@ -56,20 +123,29 @@ export class CreditCardsService {
       userId,
       "credit_cards_catalog",
     );
-    return this.prisma.creditCard.create({
-      data: {
-        userId,
-        name: dto.name,
-        bank: dto.bank,
-        brand: dto.brand,
-        last4: dto.last4,
-        color: dto.color,
-        creditLimit: dto.creditLimit,
-        closingDay: dto.closingDay,
-        paymentDueDay: dto.paymentDueDay,
-        isActive: dto.isActive ?? true,
-      },
-      select: creditCardPublicSelect,
+    return this.prisma.$transaction(async (tx) => {
+      const { _max } = await tx.creditCard.aggregate({
+        where: { userId },
+        _max: { sortOrder: true },
+      });
+
+      return tx.creditCard.create({
+        data: {
+          userId,
+          sortOrder: (_max.sortOrder ?? -1) + 1,
+          name: dto.name,
+          bank: dto.bank,
+          brand: dto.brand,
+          last4: dto.last4,
+          color: dto.color,
+          creditLimit: dto.creditLimit,
+          closingDay: dto.closingDay,
+          paymentDueDay: dto.paymentDueDay,
+          currency: dto.currency ?? "MXN",
+          isActive: dto.isActive ?? true,
+        },
+        select: creditCardPublicSelect,
+      });
     });
   }
 
@@ -84,7 +160,7 @@ export class CreditCardsService {
         userId,
         ...(query?.includeInactive ? {} : { isActive: true }),
       },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }, { createdAt: "desc" }],
+      orderBy: CREDIT_CARD_ORDER_BY,
       select: creditCardPublicSelect,
     });
   }
@@ -123,7 +199,7 @@ export class CreditCardsService {
         userId,
         ...(query?.includeInactive ? {} : { isActive: true }),
       },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }, { createdAt: "desc" }],
+      orderBy: CREDIT_CARD_ORDER_BY,
       select: creditCardPublicSelect,
     })) as CreditCardRow[];
 
@@ -134,14 +210,10 @@ export class CreditCardsService {
           trackedCards: 0,
           activeCards: 0,
           cardsWithLimit: 0,
-          totalCreditLimit: 0,
-          totalCurrentCycleSpend: 0,
-          totalAvailableCredit: 0,
-          utilizationPercent: null,
+          byCurrency: [],
           paymentDueSoonCount: 0,
           highUtilizationCount: 0,
           linkedSubscriptionsCount: 0,
-          monthlyRecurringSpend: 0,
         },
         cards: [],
       };
@@ -154,7 +226,12 @@ export class CreditCardsService {
       Math.min(...cycleStarts.map((date) => date.getTime())),
     );
 
-    const [expenseRows, subscriptionRows] = await Promise.all([
+    const [
+      expenseRows,
+      subscriptionRows,
+      confirmedStatementRows,
+      unbilledExpenseRows,
+    ] = await Promise.all([
       this.prisma.expense.findMany({
         where: {
           userId,
@@ -165,9 +242,11 @@ export class CreditCardsService {
           },
         },
         select: {
+          id: true,
           creditCardId: true,
           cost: true,
           date: true,
+          currency: true,
         },
       }),
       this.prisma.subscription.findMany({
@@ -186,11 +265,90 @@ export class CreditCardsService {
           isActive: true,
         },
       }),
+      // Ordering here makes the first matching-currency statement per card
+      // the sole rolling balance source; older statements remain evidence.
+      this.prisma.statementImport.findMany({
+        where: {
+          userId,
+          creditCardId: { in: cards.map((card) => card.id) },
+          status: StatementImportStatus.CONFIRMED,
+        },
+        select: {
+          creditCardId: true,
+          id: true,
+          periodStart: true,
+          periodEnd: true,
+          createdAt: true,
+          reconciliation: {
+            select: { closingBalance: true, currency: true, status: true },
+          },
+          paymentTargets: {
+            select: {
+              kind: true,
+              amount: true,
+              currency: true,
+              dueDate: true,
+              position: true,
+            },
+            orderBy: { position: "asc" },
+          },
+          payments: {
+            select: { amount: true, currency: true, voidedAt: true },
+          },
+          financingPlans: {
+            select: {
+              id: true,
+              type: true,
+              merchantName: true,
+              purchaseDate: true,
+              originalAmount: true,
+              installmentNumber: true,
+              installmentCount: true,
+              remainingAmount: true,
+              installmentAmount: true,
+              currency: true,
+            },
+            orderBy: { position: "asc" },
+          },
+        },
+        orderBy: [
+          { periodEnd: { sort: "desc", nulls: "last" } },
+          { createdAt: "desc" },
+          { id: "desc" },
+        ],
+      }),
+      // Credit-card expenses never reconciled into a statement (manual
+      // entries, or spend since the last import) are also real debt — but
+      // only once their date has actually arrived. Installment rows are the
+      // exception: the whole purchase is committed credit-line debt, so
+      // future-dated installments are fetched too.
+      this.prisma.expense.findMany({
+        where: {
+          userId,
+          creditCardId: { in: cards.map((card) => card.id) },
+          statementRowId: null,
+          OR: [{ date: { lte: now } }, { isInstallment: true }],
+        },
+        select: {
+          id: true,
+          creditCardId: true,
+          cost: true,
+          currency: true,
+          date: true,
+          isInstallment: true,
+          title: true,
+          merchantName: true,
+          installmentCount: true,
+          installmentTotalAmount: true,
+        },
+      }),
     ]);
     const expenses: CreditCardExpenseRow[] = expenseRows.map((expense) => ({
+      id: expense.id,
       creditCardId: expense.creditCardId,
       cost: Number(expense.cost ?? 0),
       date: expense.date,
+      currency: expense.currency,
     }));
     const subscriptions: CreditCardSubscriptionRow[] = subscriptionRows.map(
       (subscription) => ({
@@ -203,6 +361,56 @@ export class CreditCardsService {
         isActive: subscription.isActive,
       }),
     );
+    const confirmedStatements: ConfirmedStatementRow[] =
+      confirmedStatementRows.map((statement) => ({
+        id: statement.id,
+        creditCardId: statement.creditCardId,
+        periodStart: statement.periodStart,
+        periodEnd: statement.periodEnd,
+        createdAt: statement.createdAt,
+        paymentSummary: calculateStatementPaymentSummary(statement),
+        financingPlans: (statement.financingPlans ?? []).map((plan) => ({
+          id: plan.id,
+          type: plan.type,
+          merchantName: plan.merchantName ?? null,
+          purchaseDate: plan.purchaseDate ?? null,
+          originalAmount:
+            plan.originalAmount == null ? null : Number(plan.originalAmount),
+          installmentNumber: plan.installmentNumber ?? null,
+          installmentCount: plan.installmentCount ?? null,
+          remainingAmount:
+            plan.remainingAmount == null ? null : Number(plan.remainingAmount),
+          installmentAmount:
+            plan.installmentAmount == null
+              ? null
+              : Number(plan.installmentAmount),
+          currency: plan.currency,
+        })),
+        paymentTargets: statement.paymentTargets.map((target) => ({
+          kind: target.kind,
+          amount: Number(target.amount),
+          currency: target.currency,
+          dueDate: target.dueDate,
+          position: target.position,
+        })),
+      }));
+    const unbilledExpenses: UnbilledExpenseRow[] = unbilledExpenseRows.map(
+      (expense) => ({
+        id: expense.id,
+        creditCardId: expense.creditCardId,
+        cost: Number(expense.cost ?? 0),
+        currency: expense.currency,
+        date: expense.date,
+        isInstallment: expense.isInstallment === true,
+        title: expense.title ?? "",
+        merchantName: expense.merchantName ?? null,
+        installmentCount: expense.installmentCount ?? null,
+        installmentTotalAmount:
+          expense.installmentTotalAmount == null
+            ? null
+            : Number(expense.installmentTotalAmount),
+      }),
+    );
 
     const overviewCards = cards.map((card) => {
       const cycleWindow = this.resolveCurrentCycleWindow(card.closingDay, now);
@@ -213,18 +421,111 @@ export class CreditCardsService {
           expense.date.getTime() >= cycleWindow.start.getTime() &&
           expense.date.getTime() <= now.getTime(),
       );
+      const matchingCardExpenses = cardExpenses.filter(
+        (expense) => expense.currency === card.currency,
+      );
       const activeSubscriptions = subscriptions.filter(
         (subscription) =>
           subscription.creditCardId === card.id && subscription.isActive,
       );
+      const matchingSubscriptions = activeSubscriptions.filter(
+        (subscription) => subscription.currency === card.currency,
+      );
+      const cardStatements = confirmedStatements.filter(
+        (statement) => statement.creditCardId === card.id,
+      );
+      const matchingStatements = cardStatements.filter(
+        (statement) => statement.paymentSummary.currency === card.currency,
+      );
+      const [latestStatement, previousStatement] = matchingStatements;
+      // What is still due can never be less than what the statement asks to
+      // pay now: some issuers put installment charges in the no-interest
+      // target without including them in the closing balance.
+      const statementBalance = Math.max(
+        latestStatement?.paymentSummary.remainingStatement ?? 0,
+        latestStatement?.paymentSummary.currentPaymentDue ?? 0,
+      );
+      // The remaining balance of installment plans is owed but is not part of
+      // this statement's payment: the issuer only bills the current instalment.
+      const deferredInstallmentBalance = this.roundMoney(
+        (latestStatement?.financingPlans ?? [])
+          .filter((plan) => plan.currency === card.currency)
+          .reduce((sum, plan) => sum + (plan.remainingAmount ?? 0), 0),
+      );
+      const statementPeriodEnd = latestStatement?.periodEnd
+        ? this.utcDayEnd(latestStatement.periodEnd)
+        : null;
+      // Regular spend dated on the cutoff day itself is not in the statement
+      // when it has no statement row (the import cannot contain later rows),
+      // so it is post-close debt. Installment rows keep the strict boundary.
+      const statementCutoffDayStart = latestStatement?.periodEnd
+        ? this.utcDayStart(latestStatement.periodEnd)
+        : null;
+      const cardUnbilledExpenses = unbilledExpenses.filter(
+        (expense) =>
+          expense.creditCardId === card.id &&
+          // Regular spend counts once it has happened; installment rows are
+          // committed debt even when their payment date is in the future.
+          (expense.isInstallment || expense.date.getTime() <= now.getTime()) &&
+          (!statementPeriodEnd ||
+            expense.date.getTime() > statementPeriodEnd.getTime() ||
+            (!expense.isInstallment &&
+              statementCutoffDayStart !== null &&
+              expense.date.getTime() >= statementCutoffDayStart.getTime())) &&
+          // Remaining balance of a plan already in the statement is counted
+          // through deferredInstallmentBalance; its cuota rows must not
+          // be added a second time.
+          !(
+            expense.isInstallment &&
+            this.isCoveredByFinancingPlan(
+              expense,
+              latestStatement?.financingPlans ?? [],
+            )
+          ),
+      );
+      const matchingUnbilledExpenses = cardUnbilledExpenses.filter(
+        (expense) => expense.currency === card.currency,
+      );
+      // What the next statement will ask for: the installment due from each
+      // active financing plan plus post-close spend dated up to the next close.
+      // Future installment rows of a purchase beyond that close stay out. Without
+      // a closing day there is no next close, so only plans and regular
+      // (non-installment) post-close spend are counted.
+      const nextPlanInstallments = this.roundMoney(
+        (latestStatement?.financingPlans ?? [])
+          .filter(
+            (plan) =>
+              plan.currency === card.currency &&
+              (plan.remainingAmount ?? 0) > 0,
+          )
+          .reduce(
+            (sum, plan) =>
+              sum +
+              Math.min(plan.installmentAmount ?? 0, plan.remainingAmount ?? 0),
+            0,
+          ),
+      );
+      const nextCloseCutoff = schedule.nextClosingDate
+        ? this.calendarDayEndUtc(schedule.nextClosingDate)
+        : null;
+      const nextCloseSpend = matchingUnbilledExpenses
+        .filter((expense) =>
+          nextCloseCutoff
+            ? expense.date.getTime() <= nextCloseCutoff.getTime()
+            : !expense.isInstallment,
+        )
+        .reduce((sum, expense) => sum + expense.cost, 0);
+      const nextClosePaymentEstimate = this.roundMoney(
+        nextPlanInstallments + nextCloseSpend,
+      );
       const currentCycleSpend = this.roundMoney(
-        cardExpenses.reduce(
+        matchingCardExpenses.reduce(
           (sum, expense) => sum + Number(expense.cost ?? 0),
           0,
         ),
       );
       const monthlyRecurringSpend = this.roundMoney(
-        activeSubscriptions.reduce(
+        matchingSubscriptions.reduce(
           (sum, subscription) =>
             sum +
             Number(subscription.cost ?? 0) *
@@ -236,18 +537,86 @@ export class CreditCardsService {
         card.creditLimit == null
           ? null
           : this.roundMoney(Number(card.creditLimit));
+      const outstandingBalance = this.roundMoney(
+        statementBalance +
+          deferredInstallmentBalance +
+          matchingUnbilledExpenses.reduce(
+            (sum, expense) => sum + expense.cost,
+            0,
+          ),
+      );
+      const estimatedRemainingAfterNextClose = this.roundMoney(
+        Math.max(
+          0,
+          outstandingBalance - statementBalance - nextClosePaymentEstimate,
+        ),
+      );
       const availableCredit =
-        limit == null ? null : this.roundMoney(limit - currentCycleSpend);
+        limit == null ? null : this.roundMoney(limit - outstandingBalance);
       const utilizationPercent =
         limit && limit > 0
-          ? this.roundPercent((currentCycleSpend / limit) * 100)
+          ? this.roundPercent((outstandingBalance / limit) * 100)
+          : null;
+      const nextPaymentTarget = latestStatement?.paymentTargets.find(
+        (target) => target.kind === StatementPaymentTargetKind.NO_INTEREST,
+      );
+      const latestMinimumPayment = latestStatement?.paymentTargets.find(
+        (target) =>
+          target.kind === StatementPaymentTargetKind.MINIMUM &&
+          target.currency === card.currency,
+      );
+      const previousPaymentTarget = previousStatement?.paymentTargets.find(
+        (target) => target.kind === StatementPaymentTargetKind.NO_INTEREST,
+      );
+      // A fully paid statement only settles its own cycle: once the card has
+      // closed again, the app must ask for the new period's statement.
+      const needsNewStatement =
+        latestStatement?.paymentSummary.paymentStatus ===
+          StatementPaymentStatus.PAID &&
+        !this.statementCoversLastClose(
+          latestStatement.periodEnd,
+          card.closingDay,
+          now,
+        );
+      const nextPayment =
+        latestStatement?.paymentSummary.currentPaymentDue != null &&
+        latestStatement.paymentSummary.currentPaymentDue > 0
+          ? {
+              amount: latestStatement.paymentSummary.currentPaymentDue,
+              currency: card.currency,
+              dueDate: latestStatement.paymentSummary.dueDate
+                ? formatDateOnly(
+                    new Date(latestStatement.paymentSummary.dueDate),
+                  )
+                : null,
+              previousAmount:
+                previousPaymentTarget?.currency === card.currency
+                  ? previousPaymentTarget.amount
+                  : null,
+            }
           : null;
       const nextChargeDate =
-        activeSubscriptions.length > 0
-          ? activeSubscriptions
+        matchingSubscriptions.length > 0
+          ? matchingSubscriptions
               .map((subscription) => subscription.nextPaymentDate)
               .sort((left, right) => left.getTime() - right.getTime())[0]
           : null;
+      const mismatchedExpenseIds = new Set([
+        ...cardExpenses
+          .filter((expense) => expense.currency !== card.currency)
+          .map((expense) => expense.id),
+        ...cardUnbilledExpenses
+          .filter((expense) => expense.currency !== card.currency)
+          .map((expense) => expense.id),
+      ]);
+      const currencyMismatchCount =
+        cardStatements.length -
+        matchingStatements.length +
+        mismatchedExpenseIds.size +
+        (nextPaymentTarget && nextPaymentTarget.currency !== card.currency
+          ? 1
+          : 0) +
+        (activeSubscriptions.length - matchingSubscriptions.length);
 
       return {
         id: card.id,
@@ -260,19 +629,80 @@ export class CreditCardsService {
         closingDay: card.closingDay,
         paymentDueDay: card.paymentDueDay,
         isActive: card.isActive,
+        sortOrder: card.sortOrder,
         createdAt: card.createdAt,
         updatedAt: card.updatedAt,
+        currency: card.currency,
         currentCycle: {
+          currency: card.currency,
           start: formatDateOnly(cycleWindow.start),
           end: formatDateOnly(cycleWindow.end),
           spend: currentCycleSpend,
-          expenseCount: cardExpenses.length,
+          expenseCount: matchingCardExpenses.length,
+          currencyMismatchCount:
+            cardExpenses.length - matchingCardExpenses.length,
         },
         creditStatus: {
+          currency: card.currency,
           limit,
           availableCredit,
           utilizationPercent,
+          owedBalance: outstandingBalance,
         },
+        statementSummary: {
+          statementImportId: latestStatement?.id ?? null,
+          periodStart: latestStatement?.periodStart
+            ? formatDateOnly(latestStatement.periodStart)
+            : null,
+          periodEnd: latestStatement?.periodEnd
+            ? formatDateOnly(latestStatement.periodEnd)
+            : null,
+          closingBalance:
+            latestStatement?.paymentSummary.closingBalance ?? null,
+          paidTotal: latestStatement?.paymentSummary.paidTotal ?? 0,
+          paymentStatus:
+            latestStatement?.paymentSummary.paymentStatus ?? "UNPAID",
+          coversCurrentCycle: !needsNewStatement,
+          needsNewStatement,
+          remainingStatement: this.roundMoney(statementBalance),
+          deferredInstallmentBalance,
+          noInterestTarget:
+            latestStatement?.paymentSummary.noInterestTarget ?? null,
+          currentPaymentDue:
+            latestStatement?.paymentSummary.currentPaymentDue ?? null,
+          minimumPayment: latestMinimumPayment?.amount ?? null,
+          dueDate: latestStatement?.paymentSummary.dueDate
+            ? formatDateOnly(new Date(latestStatement.paymentSummary.dueDate))
+            : null,
+          postCloseSpend: this.roundMoney(
+            matchingUnbilledExpenses.reduce(
+              (sum, expense) => sum + expense.cost,
+              0,
+            ),
+          ),
+          postCloseExpenseCount: matchingUnbilledExpenses.length,
+          projectedNextCloseDate: schedule.nextClosingDate
+            ? formatDateOnly(schedule.nextClosingDate)
+            : null,
+          projectedNextCloseAmount: this.roundMoney(
+            matchingUnbilledExpenses.reduce(
+              (sum, expense) => sum + expense.cost,
+              0,
+            ),
+          ),
+          projectedTotalDebt: outstandingBalance,
+          nextPlanInstallments,
+          nextClosePaymentEstimate,
+          estimatedRemainingAfterNextClose,
+          overpaid: latestStatement?.paymentSummary.overpaid ?? 0,
+          integrityFlags: latestStatement?.paymentSummary.integrityFlags ?? {
+            missingReconciliation: true,
+            failedReconciliation: false,
+            missingPaymentBasis: true,
+            conflictingNoInterestTargets: false,
+          },
+        },
+        nextPayment,
         schedule: {
           nextClosingDate: schedule.nextClosingDate
             ? formatDateOnly(schedule.nextClosingDate)
@@ -284,12 +714,39 @@ export class CreditCardsService {
           daysUntilPaymentDue: schedule.daysUntilPaymentDue,
         },
         subscriptions: {
-          activeCount: activeSubscriptions.length,
+          currency: card.currency,
+          activeCount: matchingSubscriptions.length,
           monthlyRecurringSpend,
           nextChargeDate: nextChargeDate
             ? formatDateOnly(nextChargeDate)
             : null,
+          currencyMismatchCount:
+            activeSubscriptions.length - matchingSubscriptions.length,
         },
+        installmentPlans: (latestStatement?.financingPlans ?? []).map(
+          (plan) => ({
+            id: plan.id,
+            type: plan.type,
+            merchantName: plan.merchantName,
+            purchaseDate: plan.purchaseDate
+              ? formatDateOnly(plan.purchaseDate)
+              : null,
+            originalAmount: plan.originalAmount,
+            installmentNumber: plan.installmentNumber,
+            installmentCount: plan.installmentCount,
+            installmentAmount: plan.installmentAmount,
+            remainingAmount: plan.remainingAmount,
+            currency: plan.currency,
+            isFinalInstallment:
+              plan.installmentNumber != null &&
+              plan.installmentCount != null &&
+              plan.installmentNumber >= plan.installmentCount,
+            statementPeriodEnd: latestStatement?.periodEnd
+              ? formatDateOnly(latestStatement.periodEnd)
+              : null,
+          }),
+        ),
+        currencyMismatchCount,
         flags: {
           missingLimit: limit == null,
           highUtilization:
@@ -303,29 +760,12 @@ export class CreditCardsService {
             schedule.daysUntilClosing != null &&
             schedule.daysUntilClosing >= 0 &&
             schedule.daysUntilClosing <= 5,
+          currencyMismatch: currencyMismatchCount > 0,
         },
       };
     });
 
     const activeOverviewCards = overviewCards.filter((card) => card.isActive);
-    const totalCreditLimit = this.roundMoney(
-      activeOverviewCards.reduce(
-        (sum, card) => sum + (card.creditStatus.limit ?? 0),
-        0,
-      ),
-    );
-    const totalCurrentCycleSpend = this.roundMoney(
-      activeOverviewCards.reduce(
-        (sum, card) => sum + card.currentCycle.spend,
-        0,
-      ),
-    );
-    const totalAvailableCredit = this.roundMoney(
-      activeOverviewCards.reduce(
-        (sum, card) => sum + (card.creditStatus.availableCredit ?? 0),
-        0,
-      ),
-    );
     const cardsWithLimit = activeOverviewCards.filter(
       (card) => card.creditStatus.limit != null && card.creditStatus.limit > 0,
     ).length;
@@ -336,15 +776,7 @@ export class CreditCardsService {
         trackedCards: cards.length,
         activeCards: activeOverviewCards.length,
         cardsWithLimit,
-        totalCreditLimit,
-        totalCurrentCycleSpend,
-        totalAvailableCredit,
-        utilizationPercent:
-          totalCreditLimit > 0
-            ? this.roundPercent(
-                (totalCurrentCycleSpend / totalCreditLimit) * 100,
-              )
-            : null,
+        byCurrency: this.buildPortfolioCurrencySummaries(activeOverviewCards),
         paymentDueSoonCount: activeOverviewCards.filter(
           (card) => card.flags.paymentDueSoon,
         ).length,
@@ -355,15 +787,53 @@ export class CreditCardsService {
           (sum, card) => sum + card.subscriptions.activeCount,
           0,
         ),
-        monthlyRecurringSpend: this.roundMoney(
-          activeOverviewCards.reduce(
-            (sum, card) => sum + card.subscriptions.monthlyRecurringSpend,
-            0,
-          ),
-        ),
       },
       cards: overviewCards,
     };
+  }
+
+  async reorder(userId: string, ids: string[]) {
+    await this.entitlementsService.assertPremium(
+      userId,
+      "credit_cards_catalog",
+    );
+
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException("Credit card ids must be unique");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const owned = await tx.creditCard.findMany({
+        where: { userId },
+        orderBy: CREDIT_CARD_ORDER_BY,
+        select: { id: true },
+      });
+      const ownedIds = new Set(owned.map((card) => card.id));
+
+      if (ids.some((id) => !ownedIds.has(id))) {
+        throw new NotFoundException("Credit card not found");
+      }
+
+      const listed = new Set(ids);
+      const finalOrder = [
+        ...ids,
+        ...owned.map((card) => card.id).filter((id) => !listed.has(id)),
+      ];
+
+      for (const [index, id] of finalOrder.entries()) {
+        await tx.creditCard.update({
+          where: { id },
+          data: { sortOrder: index },
+          select: { id: true },
+        });
+      }
+    });
+
+    return this.prisma.creditCard.findMany({
+      where: { userId },
+      orderBy: CREDIT_CARD_ORDER_BY,
+      select: creditCardPublicSelect,
+    });
   }
 
   async update(id: string, userId: string, dto: UpdateCreditCardDto) {
@@ -380,6 +850,7 @@ export class CreditCardsService {
         creditLimit: dto.creditLimit,
         closingDay: dto.closingDay,
         paymentDueDay: dto.paymentDueDay,
+        currency: dto.currency,
         isActive: dto.isActive,
       },
       select: creditCardPublicSelect,
@@ -396,11 +867,38 @@ export class CreditCardsService {
     });
   }
 
+  async deletePermanently(id: string, userId: string) {
+    await this.findOne(id, userId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const statementCount = await tx.statementImport.count({
+        where: { creditCardId: id, userId },
+      });
+      if (statementCount > 0) {
+        throw new ConflictException({
+          code: "CREDIT_CARD_HAS_STATEMENTS",
+          message: "creditCardHasStatements",
+          statementCount,
+        });
+      }
+
+      const [unlinkedExpenses, unlinkedSubscriptions] = await Promise.all([
+        tx.expense.count({ where: { creditCardId: id, userId } }),
+        tx.subscription.count({ where: { creditCardId: id, userId } }),
+      ]);
+
+      await tx.creditCard.delete({ where: { id } });
+
+      return { id, deleted: true, unlinkedExpenses, unlinkedSubscriptions };
+    });
+  }
+
   async resolveLinkedCreditCardId(params: {
     userId: string;
     paymentMethod?: PaymentMethod | null;
     creditCardId?: string | null;
     existingCreditCardId?: string | null;
+    tx?: Prisma.TransactionClient;
   }): Promise<string | null> {
     if (!isCreditCardPaymentMethod(params.paymentMethod)) {
       return null;
@@ -421,6 +919,7 @@ export class CreditCardsService {
 
     await this.assertAssignableCard(params.userId, cardId, {
       allowInactive: params.existingCreditCardId === cardId,
+      tx: params.tx,
     });
 
     return cardId;
@@ -429,9 +928,9 @@ export class CreditCardsService {
   private async assertAssignableCard(
     userId: string,
     creditCardId: string,
-    options?: { allowInactive?: boolean },
+    options?: { allowInactive?: boolean; tx?: Prisma.TransactionClient },
   ) {
-    const card = await this.prisma.creditCard.findFirst({
+    const card = await (options?.tx ?? this.prisma).creditCard.findFirst({
       where: {
         id: creditCardId,
         userId,
@@ -481,6 +980,33 @@ export class CreditCardsService {
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const end = this.resolveMonthlyDay(nextMonth, closingDay, true);
     return { start, end };
+  }
+
+  /**
+   * True when the statement period reaches the most recent closing date (today
+   * included). Unknown schedule or period cannot prove staleness, so it covers.
+   */
+  private statementCoversLastClose(
+    periodEnd: Date | null,
+    closingDay: number | null,
+    now: Date,
+  ) {
+    if (!periodEnd || !closingDay || closingDay < 1 || closingDay > 31) {
+      return true;
+    }
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    let lastClose = this.resolveMonthlyDay(now, closingDay);
+    if (lastClose.getTime() > today.getTime()) {
+      lastClose = this.resolveMonthlyDay(
+        new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        closingDay,
+      );
+    }
+    // Tolerate issuers whose period end drifts a few days from the closing day.
+    const tolerance = new Date(lastClose);
+    tolerance.setDate(tolerance.getDate() - STATEMENT_CLOSE_TOLERANCE_DAYS);
+    return formatDateOnly(periodEnd) >= formatDateOnly(tolerance);
   }
 
   private resolveSchedule(card: CreditCardRow, now: Date) {
@@ -561,5 +1087,229 @@ export class CreditCardsService {
 
   private roundPercent(value: number) {
     return Number(value.toFixed(1));
+  }
+
+  // End (UTC) of the local calendar day of `value`: expense dates are stored
+  // as date-only UTC values while schedule dates use the server calendar.
+  private calendarDayEndUtc(value: Date) {
+    return new Date(
+      Date.UTC(
+        value.getFullYear(),
+        value.getMonth(),
+        value.getDate(),
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+  }
+
+  private utcDayStart(value: Date) {
+    const start = new Date(value);
+    start.setUTCHours(0, 0, 0, 0);
+    return start;
+  }
+
+  // Reuses the statement/expense financing-plan matcher on the purchase total
+  // (not the cuota), ignoring purchase date: cuota rows are dated months apart.
+  private isCoveredByFinancingPlan(
+    expense: UnbilledExpenseRow,
+    plans: ConfirmedStatementRow["financingPlans"],
+  ) {
+    if (expense.installmentTotalAmount == null) return false;
+    return plans.some(
+      (plan) =>
+        plan.currency === expense.currency &&
+        (plan.installmentCount == null ||
+          expense.installmentCount == null ||
+          plan.installmentCount === expense.installmentCount) &&
+        planMatchesExpense(
+          {
+            type: plan.type,
+            merchantName: plan.merchantName,
+            purchaseDate: null,
+            originalAmount: plan.originalAmount,
+            installmentAmount: plan.installmentAmount,
+            installmentNumber: plan.installmentNumber,
+            installmentCount: plan.installmentCount,
+            remainingAmount: plan.remainingAmount,
+            creditCardId: null,
+            statementPeriodEnd: null,
+            statementCreatedAt: null,
+          },
+          {
+            cost: expense.installmentTotalAmount,
+            date: expense.date,
+            paymentMethod: PaymentMethod.CREDIT_CARD,
+            merchantName: expense.merchantName,
+            title: expense.title,
+          },
+        ),
+    );
+  }
+
+  private utcDayEnd(value: Date) {
+    const end = new Date(value);
+    end.setUTCHours(23, 59, 59, 999);
+    return end;
+  }
+
+  private buildPortfolioCurrencySummaries(
+    cards: Array<{
+      currency: string;
+      currentCycle: { spend: number };
+      creditStatus: {
+        limit: number | null;
+        availableCredit: number | null;
+        owedBalance: number;
+      };
+      subscriptions: { monthlyRecurringSpend: number };
+      statementSummary: {
+        closingBalance: number | null;
+        paidTotal: number;
+        remainingStatement: number;
+        deferredInstallmentBalance: number;
+        currentPaymentDue: number | null;
+        postCloseSpend: number;
+        postCloseExpenseCount: number;
+        projectedNextCloseAmount: number;
+        projectedTotalDebt: number;
+        nextClosePaymentEstimate: number;
+        estimatedRemainingAfterNextClose: number;
+        dueDate: string | null;
+        projectedNextCloseDate: string | null;
+      };
+    }>,
+  ) {
+    const currencies = [...new Set(cards.map((card) => card.currency))].sort();
+    return currencies.map((currency) => {
+      const currencyCards = cards.filter((card) => card.currency === currency);
+      const totalCreditLimit = this.roundMoney(
+        currencyCards.reduce(
+          (sum, card) => sum + (card.creditStatus.limit ?? 0),
+          0,
+        ),
+      );
+      const totalOwedBalance = this.roundMoney(
+        currencyCards.reduce(
+          (sum, card) => sum + card.creditStatus.owedBalance,
+          0,
+        ),
+      );
+      // Utilization only compares balances against cards that have a limit.
+      const limitedOwedBalance = this.roundMoney(
+        currencyCards.reduce(
+          (sum, card) =>
+            (card.creditStatus.limit ?? 0) > 0
+              ? sum + card.creditStatus.owedBalance
+              : sum,
+          0,
+        ),
+      );
+      const earliestDate = (values: Array<string | null>) =>
+        values
+          .filter((value): value is string => value !== null)
+          .sort((left, right) => left.localeCompare(right))[0] ?? null;
+      return {
+        currency,
+        cardCount: currencyCards.length,
+        totalCreditLimit,
+        totalCurrentCycleSpend: this.roundMoney(
+          currencyCards.reduce((sum, card) => sum + card.currentCycle.spend, 0),
+        ),
+        totalAvailableCredit: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + (card.creditStatus.availableCredit ?? 0),
+            0,
+          ),
+        ),
+        totalOwedBalance,
+        totalClosingBalance: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + (card.statementSummary.closingBalance ?? 0),
+            0,
+          ),
+        ),
+        totalPaid: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.paidTotal,
+            0,
+          ),
+        ),
+        totalStatementRemainder: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.remainingStatement,
+            0,
+          ),
+        ),
+        totalDeferredInstallmentBalance: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) =>
+              sum + card.statementSummary.deferredInstallmentBalance,
+            0,
+          ),
+        ),
+        totalCurrentPaymentDue: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + (card.statementSummary.currentPaymentDue ?? 0),
+            0,
+          ),
+        ),
+        earliestPaymentDueDate: earliestDate(
+          currencyCards.map((card) => card.statementSummary.dueDate),
+        ),
+        totalPostCloseSpend: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.postCloseSpend,
+            0,
+          ),
+        ),
+        postCloseExpenseCount: currencyCards.reduce(
+          (sum, card) => sum + card.statementSummary.postCloseExpenseCount,
+          0,
+        ),
+        totalProjectedNextCloseAmount: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.projectedNextCloseAmount,
+            0,
+          ),
+        ),
+        earliestProjectedNextCloseDate: earliestDate(
+          currencyCards.map(
+            (card) => card.statementSummary.projectedNextCloseDate,
+          ),
+        ),
+        totalProjectedDebt: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.projectedTotalDebt,
+            0,
+          ),
+        ),
+        totalNextClosePaymentEstimate: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.statementSummary.nextClosePaymentEstimate,
+            0,
+          ),
+        ),
+        totalEstimatedRemainingAfterNextClose: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) =>
+              sum + card.statementSummary.estimatedRemainingAfterNextClose,
+            0,
+          ),
+        ),
+        utilizationPercent:
+          totalCreditLimit > 0
+            ? this.roundPercent((limitedOwedBalance / totalCreditLimit) * 100)
+            : null,
+        monthlyRecurringSpend: this.roundMoney(
+          currencyCards.reduce(
+            (sum, card) => sum + card.subscriptions.monthlyRecurringSpend,
+            0,
+          ),
+        ),
+      };
+    });
   }
 }

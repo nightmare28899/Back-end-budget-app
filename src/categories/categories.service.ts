@@ -7,6 +7,11 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateCategoryDto } from "./dto/create-category.dto";
 import { UpdateCategoryDto } from "./dto/update-category.dto";
 
+const CATEGORY_DELETE_BLOCKED = {
+  code: "CATEGORY_IN_USE",
+  message: "categoryDeleteBlocked",
+} as const;
+
 @Injectable()
 export class CategoriesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -26,10 +31,28 @@ export class CategoriesService {
   }
 
   async findAll(userId: string) {
-    return this.prisma.category.findMany({
+    const categories = await this.prisma.category.findMany({
       where: { userId },
+      include: {
+        _count: {
+          select: {
+            expenses: true,
+            subscriptions: true,
+            statementRows: true,
+          },
+        },
+      },
       orderBy: { name: "asc" },
     });
+
+    return categories.map(({ _count, ...category }) => ({
+      ...category,
+      usage: {
+        expenseCount: _count.expenses,
+        subscriptionCount: _count.subscriptions,
+        statementRowCount: _count.statementRows,
+      },
+    }));
   }
 
   async findOne(id: string, userId: string) {
@@ -49,8 +72,36 @@ export class CategoriesService {
   }
 
   async remove(id: string, userId: string) {
-    await this.findOne(id, userId);
-    return this.prisma.category.delete({ where: { id } });
+    const category = await this.prisma.category.findFirst({
+      where: { id, userId },
+      select: {
+        id: true,
+        _count: {
+          select: {
+            expenses: true,
+            subscriptions: true,
+            statementRows: true,
+          },
+        },
+      },
+    });
+
+    if (!category) throw new NotFoundException("Category not found");
+
+    const { expenses, subscriptions, statementRows } = category._count;
+    if (expenses > 0 || subscriptions > 0 || statementRows > 0) {
+      throw new ConflictException(CATEGORY_DELETE_BLOCKED);
+    }
+
+    try {
+      return await this.prisma.category.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "P2003") {
+        throw new ConflictException(CATEGORY_DELETE_BLOCKED);
+      }
+
+      throw error;
+    }
   }
 
   async seedDefaults(userId: string) {

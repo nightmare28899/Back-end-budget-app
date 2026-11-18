@@ -28,4 +28,14 @@ export class GoogleAuthDto {
   @IsOptional()
   @IsBoolean()
   termsAccepted?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Reject Google authentication when matching account does not already exist.",
+  })
+  @Transform(({ value }) => parseOptionalBooleanValue(value as unknown))
+  @IsOptional()
+  @IsBoolean()
+  existingUserOnly?: boolean;
 }

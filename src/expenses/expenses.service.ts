@@ -8,7 +8,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StorageService } from "../storage/storage.service";
 import { CreateExpenseDto } from "./dto/create-expense.dto";
 import { UpdateExpenseDto } from "./dto/update-expense.dto";
-import { QueryExpenseDto } from "./dto/query-expense.dto";
+import { ExpensePaymentStatus, QueryExpenseDto } from "./dto/query-expense.dto";
 import { LocationSuggestionQueryDto } from "./dto/location-suggestion-query.dto";
 import { InstallmentFrequency, PaymentMethod, Prisma } from "@prisma/client";
 import {
@@ -23,16 +23,37 @@ import {
   InstallmentFrequencyValue,
 } from "./installments/expense-installments.util";
 import { EntitlementsService } from "../common/entitlements/entitlements.service";
+import {
+  ExpenseFinancingPlan,
+  FinancingPlanMatcherService,
+} from "./financing-plan-matcher";
+
+const EXPENSE_INCLUDE = {
+  category: true,
+  creditCard: { select: creditCardPublicSelect },
+  statementRow: {
+    select: {
+      statementImportId: true,
+      statementImport: {
+        select: {
+          isPaid: true,
+          paymentStatus: true,
+          sourceFileName: true,
+          periodStart: true,
+          periodEnd: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.ExpenseInclude;
 
 type ExpenseWithCategory = Prisma.ExpenseGetPayload<{
-  include: {
-    category: true;
-    creditCard: { select: typeof creditCardPublicSelect };
-  };
+  include: typeof EXPENSE_INCLUDE;
 }>;
 
 type ExpenseWithPresignedUrl = ExpenseWithCategory & {
   imagePresignedUrl?: string;
+  financingPlan: ExpenseFinancingPlan | null;
 };
 
 const MAX_SYNC_BATCH_SIZE = 200;
@@ -60,6 +81,7 @@ export class ExpensesService {
     private readonly storageService: StorageService,
     private readonly creditCardsService: CreditCardsService,
     private readonly entitlementsService: EntitlementsService,
+    private readonly financingPlanMatcher: FinancingPlanMatcherService,
   ) {}
 
   async create(
@@ -73,8 +95,27 @@ export class ExpensesService {
       imageUrl = await this.storageService.uploadFile(file);
     }
 
-    const categoryId = await this.resolveCategoryId(userId, dto);
-    const currency = dto.currency ?? (await this.getUserCurrency(userId));
+    return this.createWithClient({ userId, dto, imageUrl });
+  }
+
+  async createInTransaction(
+    userId: string,
+    dto: CreateExpenseDto,
+    tx: Prisma.TransactionClient,
+  ) {
+    return this.createWithClient({ userId, dto, tx });
+  }
+
+  private async createWithClient(input: {
+    userId: string;
+    dto: CreateExpenseDto;
+    imageUrl?: string;
+    tx?: Prisma.TransactionClient;
+  }) {
+    const { userId, dto, imageUrl, tx } = input;
+    const db = tx ?? this.prisma;
+    const categoryId = await this.resolveCategoryId(userId, dto, db);
+    const currency = dto.currency ?? (await this.getUserCurrency(userId, db));
     const paymentMethod =
       normalizePaymentMethod(dto.paymentMethod) ?? PaymentMethod.CASH;
     const creditCardId =
@@ -82,6 +123,7 @@ export class ExpensesService {
         userId,
         paymentMethod,
         creditCardId: dto.creditCardId,
+        tx,
       });
 
     const installmentPlan = this.buildInstallmentPlan(dto);
@@ -90,19 +132,22 @@ export class ExpensesService {
         userId,
         "installment_expenses",
       );
-      return this.createInstallmentExpenses({
-        userId,
-        dto,
-        imageUrl,
-        categoryId,
-        currency,
-        paymentMethod,
-        creditCardId,
-        installmentPlan,
-      });
+      return this.createInstallmentExpenses(
+        {
+          userId,
+          dto,
+          imageUrl,
+          categoryId,
+          currency,
+          paymentMethod,
+          creditCardId,
+          installmentPlan,
+        },
+        tx,
+      );
     }
 
-    return this.prisma.expense.create({
+    return db.expense.create({
       data: {
         title: dto.title,
         merchantName: dto.merchantName,
@@ -117,10 +162,7 @@ export class ExpensesService {
         imageUrl,
         userId,
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
   }
 
@@ -131,17 +173,18 @@ export class ExpensesService {
     const endOfDay = new Date();
     endOfDay.setHours(23, 59, 59, 999);
 
-    const expenses = await this.prisma.expense.findMany({
+    const rawExpenses = await this.prisma.expense.findMany({
       where: {
         userId,
         date: { gte: startOfDay, lte: endOfDay },
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
       orderBy: { date: "desc" },
     });
+    const expenses = await this.financingPlanMatcher.enrich(
+      userId,
+      rawExpenses,
+    );
 
     const total = expenses.reduce((sum, exp) => sum + Number(exp.cost), 0);
     const currencyBreakdown = this.buildCurrencyBreakdownFromExpenses(expenses);
@@ -211,11 +254,13 @@ export class ExpensesService {
       };
 
       if (query.from) {
-        dateFilter.gte = new Date(query.from);
+        const fromDate = new Date(query.from);
+        fromDate.setUTCHours(0, 0, 0, 0);
+        dateFilter.gte = fromDate;
       }
       if (query.to) {
         const toDate = new Date(query.to);
-        toDate.setHours(23, 59, 59, 999);
+        toDate.setUTCHours(23, 59, 59, 999);
         dateFilter.lte = minDate(toDate, now);
       }
 
@@ -242,14 +287,49 @@ export class ExpensesService {
       where.categoryId = query.categoryId;
     }
 
-    const [expenses, totalCount, sumResult, currencyGroups] = await Promise.all(
-      [
+    if (query.creditCardId) {
+      where.creditCardId = query.creditCardId;
+    }
+
+    if (query.paymentStatus === ExpensePaymentStatus.PAID) {
+      // Paid only ever means "reconciled into a statement marked paid" — a
+      // manual credit-card expense with no statement yet is never PAID, it
+      // just isn't UNPAID either until it's linked (see below).
+      where.statementRow = {
+        is: { statementImport: { is: { paymentStatus: "PAID" } } },
+      };
+    } else if (query.paymentStatus === ExpensePaymentStatus.PARTIAL) {
+      where.statementRow = {
+        is: { statementImport: { is: { paymentStatus: "PARTIAL" } } },
+      };
+    } else if (query.paymentStatus === ExpensePaymentStatus.UNPAID) {
+      // Mirrors the UI badge in ExpenseList: unpaid is either a statement row
+      // whose statement isn't paid yet, or a credit-card expense that hasn't
+      // been reconciled into any statement at all. Combined via `AND` (not
+      // reassigning `where.OR`) so it composes with the `q` search filter
+      // above instead of clobbering it.
+      const unpaidCondition: Prisma.ExpenseWhereInput = {
+        OR: [
+          {
+            statementRow: {
+              is: { statementImport: { is: { paymentStatus: "UNPAID" } } },
+            },
+          },
+          { statementRow: null, paymentMethod: PaymentMethod.CREDIT_CARD },
+        ],
+      };
+      where.AND = Array.isArray(where.AND)
+        ? [...where.AND, unpaidCondition]
+        : where.AND
+          ? [where.AND, unpaidCondition]
+          : [unpaidCondition];
+    }
+
+    const [rawExpenses, totalCount, sumResult, currencyGroups] =
+      await Promise.all([
         this.prisma.expense.findMany({
           where,
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
           orderBy: { date: "desc" },
           skip,
           take: limit,
@@ -264,9 +344,12 @@ export class ExpensesService {
           where,
           _sum: { cost: true },
         }),
-      ],
-    );
+      ]);
 
+    const expenses = await this.financingPlanMatcher.enrich(
+      userId,
+      rawExpenses,
+    );
     const total = Number(sumResult._sum.cost ?? 0);
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
     const currencyBreakdown = currencyGroups.map((item) => ({
@@ -456,15 +539,15 @@ export class ExpensesService {
   }
 
   async findOne(id: string, userId: string): Promise<ExpenseWithPresignedUrl> {
-    const expense = await this.prisma.expense.findFirst({
+    const rawExpense = await this.prisma.expense.findFirst({
       where: { id, userId },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
 
-    if (!expense) throw new NotFoundException("Expense not found");
+    if (!rawExpense) throw new NotFoundException("Expense not found");
+    const [expense] = await this.financingPlanMatcher.enrich(userId, [
+      rawExpense,
+    ]);
 
     if (expense.imageUrl) {
       try {
@@ -572,10 +655,7 @@ export class ExpensesService {
         categoryId: nextCategoryId,
         date: dto.date ? new Date(dto.date) : undefined,
       },
-      include: {
-        category: true,
-        creditCard: { select: creditCardPublicSelect },
-      },
+      include: EXPENSE_INCLUDE,
     });
   }
 
@@ -753,21 +833,24 @@ export class ExpensesService {
     };
   }
 
-  private async createInstallmentExpenses(input: {
-    userId: string;
-    dto: CreateExpenseDto;
-    imageUrl?: string;
-    categoryId: string;
-    currency: string;
-    paymentMethod: PaymentMethod;
-    creditCardId: string | null;
-    installmentPlan: NonNullable<
-      ReturnType<ExpensesService["buildInstallmentPlan"]>
-    >;
-  }) {
+  private async createInstallmentExpenses(
+    input: {
+      userId: string;
+      dto: CreateExpenseDto;
+      imageUrl?: string;
+      categoryId: string;
+      currency: string;
+      paymentMethod: PaymentMethod;
+      creditCardId: string | null;
+      installmentPlan: NonNullable<
+        ReturnType<ExpensesService["buildInstallmentPlan"]>
+      >;
+    },
+    transaction?: Prisma.TransactionClient,
+  ) {
     const installmentGroupId = randomUUID();
 
-    return this.prisma.$transaction(async (tx) => {
+    const createSchedule = async (tx: Prisma.TransactionClient) => {
       const createdExpenses: ExpenseWithCategory[] = [];
 
       for (const scheduleItem of input.installmentPlan.schedule) {
@@ -794,17 +877,17 @@ export class ExpensesService {
             installmentPurchaseDate: input.installmentPlan.purchaseDate,
             installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
           },
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
         });
 
         createdExpenses.push(created);
       }
 
       return createdExpenses[0];
-    });
+    };
+    return transaction
+      ? createSchedule(transaction)
+      : this.prisma.$transaction(createSchedule);
   }
 
   private async replaceInstallmentExpenses(input: {
@@ -870,10 +953,7 @@ export class ExpensesService {
             installmentPurchaseDate: input.installmentPlan.purchaseDate,
             installmentFirstPaymentDate: input.installmentPlan.firstPaymentDate,
           },
-          include: {
-            category: true,
-            creditCard: { select: creditCardPublicSelect },
-          },
+          include: EXPENSE_INCLUDE,
         });
 
         createdExpenses.push(created);
@@ -947,10 +1027,7 @@ export class ExpensesService {
           installmentPurchaseDate: null,
           installmentFirstPaymentDate: null,
         },
-        include: {
-          category: true,
-          creditCard: { select: creditCardPublicSelect },
-        },
+        include: EXPENSE_INCLUDE,
       });
     });
   }
@@ -978,9 +1055,10 @@ export class ExpensesService {
   private async resolveCategoryId(
     userId: string,
     dto: CreateExpenseDto,
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<string> {
     if (dto.categoryId) {
-      const category = await this.prisma.category.findFirst({
+      const category = await db.category.findFirst({
         where: { id: dto.categoryId, userId },
         select: { id: true },
       });
@@ -998,7 +1076,7 @@ export class ExpensesService {
         throw new BadRequestException("categoryName cannot be empty");
       }
 
-      const existing = await this.prisma.category.findFirst({
+      const existing = await db.category.findFirst({
         where: {
           userId,
           name: { equals: name, mode: "insensitive" },
@@ -1010,7 +1088,7 @@ export class ExpensesService {
         return existing.id;
       }
 
-      const created = await this.prisma.category.create({
+      const created = await db.category.create({
         data: {
           userId,
           name,
@@ -1028,8 +1106,11 @@ export class ExpensesService {
     );
   }
 
-  private async getUserCurrency(userId: string): Promise<string> {
-    const user = await this.prisma.user.findUnique({
+  private async getUserCurrency(
+    userId: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<string> {
+    const user = await db.user.findUnique({
       where: { id: userId },
       select: { currency: true },
     });

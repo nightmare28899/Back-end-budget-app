@@ -1,7 +1,17 @@
-import { Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { existsSync, readFileSync } from "node:fs";
-import { App, ServiceAccount, cert, getApps, initializeApp } from "firebase-admin/app";
+import {
+  App,
+  ServiceAccount,
+  cert,
+  getApps,
+  initializeApp,
+} from "firebase-admin/app";
 import { Auth, DecodedIdToken, getAuth } from "firebase-admin/auth";
 import { Messaging, getMessaging } from "firebase-admin/messaging";
 
@@ -53,7 +63,9 @@ export class FirebaseAdminService {
       return this.firebaseApp;
     }
 
-    const existing = getApps().find((item: App) => item.name === FIREBASE_APP_NAME);
+    const existing = getApps().find(
+      (item: App) => item.name === FIREBASE_APP_NAME,
+    );
     if (existing) {
       this.firebaseApp = existing;
       return this.firebaseApp;

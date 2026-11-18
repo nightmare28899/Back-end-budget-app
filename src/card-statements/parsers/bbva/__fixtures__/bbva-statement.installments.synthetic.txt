@@ -1,0 +1,41 @@
+BBVA MEXICO, S.A., INSTITUCION DE BANCA MULTIPLE
+TARJETA BBVA (SINTETICA)
+TU PAGO REQUERIDO ESTE PERIODO
+Periodo: 15-ene-2027 al 14-feb-2027
+Fecha de corte: 14-feb-2027
+Fecha límite de pago:1 lunes, 01-mar-2027
+Pago para no generar intereses:2 $1,000.00
+Pago mínimo + compras y cargo diferidos a meses:3 $700.00
+Pago mínimo:4 $100.00
+RESUMEN DE CARGOS Y ABONOS DEL PERIODO
+Adeudo del periodo anterior $500.00
+Cargos regulares (no a meses) + $400.00
+Cargos compras a meses (capital)7 + $200.00
+Monto de intereses8 + $10.00
+Monto de comisiones + $0.00
+IVA de intereses y comisiones + $0.00
+Pagos y abonos - $110.00
+Saldo cargos regulares: $1,000.00
+Saldo cargo a meses: $2,100.50
+Saldo deudor total:11 $3,100.50
+=== PAGE 2 ===
+DESGLOSE DE MOVIMIENTOS
+COMPRAS Y CARGOS DIFERIDOS A MESES SIN INTERESES Tarjeta titular: XXXXXXXXXXXX0000
+Fecha de la operacion Descripcion Monto original Saldo pendiente Pago requerido Num. de pago Tasa de interes aplicable
+10-jun-2026 STORE ALPHA ; Tarjeta Digital ***0000 $1,200.00 $600.00 $100.00 6 de 12 0.00%
+11-jul-2026 STORE BETA WITH A LONG
+DESCRIPTION CONTINUED ; Tarjeta Digital ***0000
+$2,400.00 $1,200.00 $200.00 7 de 12 0.00%
+COMPRAS Y CARGOS DIFERIDOS A MESES CON INTERESES Tarjeta titular: XXXXXXXXXXXX0000
+Fecha de la operacion Descripcion Monto original Saldo pendiente Intereses IVA Pago requerido Num. de pago Tasa de interes aplicable
+12-dic-2026 STORE GAMMA ; Tarjeta Digital ***0000 $1,000.00 $300.50 $5.00 $0.80 $105.80 8 de 10 24.00%
+=== PAGE 3 ===
+CARGOS,COMPRAS Y ABONOS REGULARES(NO A MESES) Tarjeta titular: XXXXXXXXXXXX0000
+Fecha de la operacion Fecha de cargo Descripcion del movimiento Monto
+05-feb-2027 06-feb-2027 CORNER CAFE + $50.00
+14-feb-2027 15-feb-2027 06 DE 12 STORE ALPHA ; Tarjeta Digital ***0000 + $100.00
+14-feb-2027 15-feb-2027 07 DE 12 STORE BETA WITH A LONG + $200.00
+Total cargos $350.00
+=== PAGE 4 ===
+9. El saldo de compras y cargos diferidos a meses con intereses se calcula mensualmente.
+NOTAS ACLARATORIAS

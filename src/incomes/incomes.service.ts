@@ -76,6 +76,10 @@ export class IncomesService {
       ];
     }
 
+    if (query.page !== undefined) {
+      return this.findPage(where, query.page, query.limit ?? 20);
+    }
+
     const [incomes, sumResult, currencyGroups] = await Promise.all([
       this.prisma.income.findMany({
         where,
@@ -103,7 +107,48 @@ export class IncomesService {
     };
   }
 
-  async getSummary(userId: string, referenceDate?: string) {
+  private async findPage(
+    where: Prisma.IncomeWhereInput,
+    page: number,
+    limit: number,
+  ) {
+    const [incomes, totalCount, sumResult, currencyGroups] = await Promise.all([
+      this.prisma.income.findMany({
+        where,
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.income.count({ where }),
+      this.prisma.income.aggregate({ where, _sum: { amount: true } }),
+      this.prisma.income.groupBy({
+        by: ["currency"],
+        where,
+        _sum: { amount: true },
+      }),
+    ]);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+    return {
+      incomes,
+      total: roundMoney(Number(sumResult._sum.amount ?? 0)),
+      count: incomes.length,
+      currencyBreakdown: currencyGroups.map((item) => ({
+        currency: item.currency,
+        total: roundMoney(Number(item._sum.amount ?? 0)),
+      })),
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    };
+  }
+
+  async getSummary(userId: string, referenceDate?: string, currency?: string) {
     const now = referenceDate ? new Date(referenceDate) : new Date();
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -129,12 +174,11 @@ export class IncomesService {
     const trackedEnd =
       endOfDay(now) < budgetWindow.end ? endOfDay(now) : budgetWindow.end;
 
+    const dateRange = { gte: budgetWindow.start, lte: trackedEnd };
     const where = {
       userId,
-      date: {
-        gte: budgetWindow.start,
-        lte: trackedEnd,
-      },
+      date: dateRange,
+      ...(currency ? { currency } : {}),
     } satisfies Prisma.IncomeWhereInput;
 
     const [incomeAgg, incomeCount, expenseAgg] = await Promise.all([
@@ -146,10 +190,8 @@ export class IncomesService {
       this.prisma.expense.aggregate({
         where: {
           userId,
-          date: {
-            gte: budgetWindow.start,
-            lte: trackedEnd,
-          },
+          date: dateRange,
+          ...(currency ? { currency } : {}),
         },
         _sum: { cost: true },
       }),
@@ -158,6 +200,10 @@ export class IncomesService {
     const totalIncome = roundMoney(Number(incomeAgg._sum.amount ?? 0));
     const totalExpenses = roundMoney(Number(expenseAgg._sum.cost ?? 0));
     const net = roundMoney(totalIncome - totalExpenses);
+
+    const otherCurrencies = currency
+      ? await this.getOtherCurrencyTotals(userId, dateRange, currency)
+      : undefined;
 
     return {
       period: {
@@ -173,7 +219,56 @@ export class IncomesService {
         incomeCount > 0 ? roundMoney(totalIncome / incomeCount) : 0,
       savingsRate:
         totalIncome > 0 ? roundPercent((net / totalIncome) * 100) : null,
+      ...(currency ? { currency, otherCurrencies } : {}),
     };
+  }
+
+  /** Per-currency totals for currencies other than `currency`; never summed together. */
+  private async getOtherCurrencyTotals(
+    userId: string,
+    date: Prisma.DateTimeFilter,
+    currency: string,
+  ) {
+    const filter = { userId, date, currency: { not: currency } };
+    const [incomeGroups, expenseGroups] = await Promise.all([
+      this.prisma.income.groupBy({
+        by: ["currency"],
+        where: filter,
+        _sum: { amount: true },
+      }),
+      this.prisma.expense.groupBy({
+        by: ["currency"],
+        where: filter,
+        _sum: { cost: true },
+      }),
+    ]);
+
+    const totals = new Map<
+      string,
+      { currency: string; totalIncome: number; totalExpenses: number }
+    >();
+    const entry = (code: string) => {
+      let item = totals.get(code);
+      if (!item) {
+        item = { currency: code, totalIncome: 0, totalExpenses: 0 };
+        totals.set(code, item);
+      }
+      return item;
+    };
+    for (const group of incomeGroups) {
+      entry(group.currency).totalIncome = roundMoney(
+        Number(group._sum.amount ?? 0),
+      );
+    }
+    for (const group of expenseGroups) {
+      entry(group.currency).totalExpenses = roundMoney(
+        Number(group._sum.cost ?? 0),
+      );
+    }
+
+    return [...totals.values()]
+      .filter((item) => item.totalIncome !== 0 || item.totalExpenses !== 0)
+      .sort((a, b) => a.currency.localeCompare(b.currency));
   }
 
   async update(id: string, userId: string, dto: UpdateIncomeDto) {
